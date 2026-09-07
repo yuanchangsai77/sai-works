@@ -258,10 +258,10 @@ class ConsolePresenter:
 
     def show_session_list(self, sessions: list[SessionRecord]) -> None:
         if not sessions:
-            self._print("[testcode] no saved sessions")
+            self._print("[AgentForge] no saved sessions")
             return
 
-        self._print("[testcode] saved sessions:")
+        self._print("[AgentForge] saved sessions:")
         for index, session in enumerate(sessions, start=1):
             preview = session.preview or "(no user messages yet)"
             self._print(
@@ -274,7 +274,7 @@ class ConsolePresenter:
     def show_user_prompt(self, prompt: str) -> None:
         CYAN = "\033[1;36m"
         RESET = "\033[0m"
-        self._print(f"\n {CYAN}testcode>{RESET} {prompt}")
+        self._print(f"\n {CYAN}AgentForge>{RESET} {prompt}")
 
     def show_session_history(self, session_or_messages) -> None:
         GRAY = "\033[90m"
@@ -577,7 +577,7 @@ class ConsolePresenter:
         RESET = "\033[0m"
         GRAY = "\033[90m"
 
-        self._print(f"{BOLD}testcode CLI Workbench Shortcuts & Commands:{RESET}")
+        self._print(f"{BOLD}AgentForge CLI Workbench Shortcuts & Commands:{RESET}")
         if registry and hasattr(registry, "list_commands"):
             cmds = registry.list_commands()
             max_name_len = max(len(c.usage or c.name) for c in cmds)
@@ -841,7 +841,7 @@ class ConsolePresenter:
     def show_interrupted(self) -> None:
         RED = "\033[1;31m"
         RESET = "\033[0m"
-        self._print(f"\n {RED}⎿  Interrupted · What should testcode CLI do instead?{RESET}\n")
+        self._print(f"\n {RED}⎿  Interrupted · What should AgentForge CLI do instead?{RESET}\n")
 
     def clear_running_status_bar(self, tools_count: int) -> None:
         self.status_bar.clear_running(tools_count)

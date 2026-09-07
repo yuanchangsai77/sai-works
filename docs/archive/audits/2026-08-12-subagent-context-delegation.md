@@ -2,7 +2,7 @@
 
 ## 文档状态
 
-本文是已归档的工程复盘与安全分析，记录 2026-08-12 针对 `testcode` harness 的审查证据、风险判断
+本文是已归档的工程复盘与安全分析，记录 2026-08-12 针对 `AgentForge` harness 的审查证据、风险判断
 和修复过程。对应修复提交为 `66f7d14`。本文不再定义当前行为，也不作为未完成工作的权威清单；
 现行运行时契约以[Subagent 会话集群](../../core/subagent-session-clusters.md)、
 [Agent 执行循环](../../core/agent-loop.md)、[执行安全](../../core/execution-safety.md)和

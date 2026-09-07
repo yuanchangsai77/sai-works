@@ -150,9 +150,9 @@ def test_resize_preserves_prompt_and_refreshes_only_the_chrome(monkeypatch, caps
 
     output = capsys.readouterr().out
     assert output.startswith("\r\033[3A\r\033[J")
-    assert "testcode>" in output
+    assert "AgentForge>" in output
     assert output.count("────────────────────") == 2
-    assert output.endswith("\r\033[2A\033[4C")
+    assert output.endswith("\r\033[2A\033[6C")
 
 
 def test_resize_erases_all_reflowed_top_border_rows(monkeypatch, capsys):
@@ -168,8 +168,8 @@ def test_resize_erases_all_reflowed_top_border_rows(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert output.startswith("\r\033[5A\r\033[J")
     assert output.count("────────────────────") == 2
-    assert "testcode>" in output
-    assert output.endswith("\r\033[2A\033[11C")
+    assert "AgentForge>" in output
+    assert output.endswith("\r\033[2A\033[13C")
 
 
 def test_growing_frame_stays_attached_to_transcript(monkeypatch, capsys):
@@ -193,7 +193,7 @@ def test_submitted_input_keeps_both_history_borders(monkeypatch, capsys):
 
     output = capsys.readouterr().out
     assert output.count("────────────────────") == 2
-    assert "testcode>" in output
+    assert "AgentForge>" in output
 
 
 def test_show_session_state(capsys):
@@ -422,7 +422,7 @@ def test_presenter_prompt_input(monkeypatch, capsys):
     assert val == "hello test"
     
     output = capsys.readouterr().out
-    assert "testcode>" in output
+    assert "AgentForge>" in output
     assert "shortcuts" in output
     assert "StubModel" in output
 

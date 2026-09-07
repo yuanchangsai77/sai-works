@@ -10,7 +10,7 @@
 
 ### 目标
 
-- 复用 `testcode` 已有能力仓库、工具、安全、日志和会话基础设施。
+- 复用 `AgentForge` 已有能力仓库、工具、安全、日志和会话基础设施。
 - 将 API Control Board 作为独立 Model Plane，而不是在 Agent Runtime 中重复 Provider 接入。
 - 让本地工具、MCP、远程 Agent 和设备能力共享稳定的能力语义。
 - 允许能力、实体和工作流通过 manifest、Plugin、Profile 与发现服务动态加入，策略通过独立且可验证
@@ -29,9 +29,9 @@
 
 ## 2. 当前项目定位
 
-### Agent Plane：`testcode`
+### Agent Plane：`AgentForge`
 
-当前 `testcode` 是 LLM 驱动的 CLI workbench，已有工具执行、能力仓库、Skill、MCP、安全审批、
+当前 `AgentForge` 是 LLM 驱动的 CLI workbench，已有工具执行、能力仓库、Skill、MCP、安全审批、
 会话和可观察性。未来主要向持续运行时、可恢复 Workflow、事件与远程能力扩展。
 
 ### Model Plane：API Control Board
@@ -41,7 +41,7 @@
 
 ### Device Plane：未来 Device Fabric
 
-Device Plane 负责设备注册、能力、租约、调度、执行、状态和数据协调。第一版可以是 `testcode`
+Device Plane 负责设备注册、能力、租约、调度、执行、状态和数据协调。第一版可以是 `AgentForge`
 旁的模块或轻量服务；只有独立常驻、共享访问或伸缩需求出现后才拆成独立部署。
 
 ## 3. 横向 Plane
@@ -182,7 +182,7 @@ Profile Store 只拥有已经生效的偏好与组合声明，不拥有组织安
 ### 本机开发
 
 ```text
-testcode
+AgentForge
   → local API Control Board
   → in-process 或 local Device Control
   → Device Simulator / Linux Agent
@@ -206,7 +206,7 @@ Assistant Runtime 拥有会话和工作流；Relay/Rendezvous 只解决可达和
 
 ### 仓库策略
 
-当前保持 Python `testcode` 与 Node/Electron API Control Board 两个仓库和独立进程。未来组件先
+当前保持 Python `AgentForge` 与 Node/Electron API Control Board 两个仓库和独立进程。未来组件先
 按清晰模块边界实现；只有生命周期、信任域、伸缩或发布节奏不同后再拆服务。是否进入 monorepo
 由真实统一发布和共享协议压力决定。
 

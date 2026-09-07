@@ -20,7 +20,7 @@
 
 `ToolProvider` 的现有接口描述反映当前直接注册模型。目标架构中，外部来源先进入能力仓库，只有被选中的叶子能力才通过 provider/adapter 进入当前激活集；该演进以 `docs/extensions/capability-warehouse.md` 为准。
 
-To support features like the **Skill System (P2)**, **Project Rules (P1.2)**, **Explicit Context (P1.4)**, and **MCP Integration (P3)** without bloating the core execution loop, we introduce three generic extension interfaces into the `testcode` runtime:
+To support features like the **Skill System (P2)**, **Project Rules (P1.2)**, **Explicit Context (P1.4)**, and **MCP Integration (P3)** without bloating the core execution loop, we introduce three generic extension interfaces into the `AgentForge` runtime:
 1. **`ContextLoader`**: Hook interface for loading dynamic context, rules, summaries, explicit user context, and skills at the start of a run. Loaders provide candidate context and archive references; they should not treat the prompt as long-term storage or own final pruning policy.
 2. **`ToolProvider`**: Hook interface for registering external tools while reusing the same registry, policy, approval, and logging path as built-in tools. Providers should expose registration-ready tool handles, not own long-lived remote discovery policy.
 3. **`ResourceProvider`**: Hook interface for exposing indexed, on-demand context sources such as MCP resources without forcing them through the tool registration path.
@@ -159,7 +159,7 @@ Recommended internal layering for MCP:
 - `MCPManager`: shared server lifecycle and client cache
 - `MCPClient`: per-server protocol operations such as `initialize`, `tools/list`, and `tools/call`
 - `MCPTransport`: transport abstraction, with `stdio` as the first implementation
-- adapter layer: converts MCP tool schemas and results into `testcode` `Tool` / `ToolResult`
+- adapter layer: converts MCP tool schemas and results into `AgentForge` `Tool` / `ToolResult`
 
 This split matters because process lifecycle, lazy discovery policy, schema adaptation, and runtime registration change at different rates. A single monolithic provider would technically work for a demo, but it would couple transport concerns to runtime composition and make later support for multiple transports, resource indexing, startup isolation, and reconnection logic harder to test and evolve.
 

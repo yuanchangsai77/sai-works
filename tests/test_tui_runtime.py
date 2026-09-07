@@ -300,7 +300,7 @@ def test_first_answer_reuses_prompt_separator_without_adding_a_second_blank_line
     )
 
     lines = _plain(output.getvalue()).splitlines()
-    prompt_line = next(index for index, line in enumerate(lines) if "testcode> 您好" in line)
+    prompt_line = next(index for index, line in enumerate(lines) if "AgentForge> 您好" in line)
     answer_line = next(
         index for index, line in enumerate(lines) if "您好！请问有什么可以帮您的吗？" in line
     )
@@ -502,7 +502,7 @@ def test_committed_output_is_written_once_to_native_scrollback():
     presenter._print("answer")
 
     plain = _plain(output.getvalue())
-    assert plain.count("testcode> inspect") == 1
+    assert plain.count("AgentForge> inspect") == 1
     assert plain.count("answer") == 1
 
 
@@ -539,7 +539,7 @@ def test_runtime_frame_places_model_below_composer(monkeypatch):
     presenter._render_runtime()
 
     plain = _plain(output.getvalue())
-    assert plain.index("testcode>") < plain.index("gpt-5 · /repo")
+    assert plain.index("AgentForge>") < plain.index("gpt-5 · /repo")
 
 
 def test_runtime_thinking_has_plain_blank_rows_above_and_below():
@@ -562,7 +562,7 @@ def test_prompt_text_reapplies_gray_background_after_colored_label():
 
     rows, _cursor_row, _cursor_column = presenter._composer_rows(80)
 
-    assert "testcode> \033[0m\033[48;5;236mhello" in rows[0]
+    assert "AgentForge> \033[0m\033[48;5;236mhello" in rows[0]
     assert "hello\033[K\033[0m" in rows[0]
 
 
@@ -685,7 +685,7 @@ def test_composer_rows_scrolled_multiline_does_not_repeat_prompt_prefix():
 
     assert len(plain_rows) == 6
     assert plain_rows[0].startswith("  ")
-    assert "testcode>" not in plain_rows[0]
+    assert "AgentForge>" not in plain_rows[0]
     assert all(len(row) < 80 for row in plain_rows)
 
 

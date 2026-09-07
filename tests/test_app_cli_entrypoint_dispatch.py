@@ -49,7 +49,7 @@ def test_main_version_reports_package_version(monkeypatch, capsys):
         app_module.main()
 
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out.strip() == f"testcode {__version__}"
+    assert capsys.readouterr().out.strip() == f"AgentForge {__version__}"
 
 
 def test_main_once_dispatches_prompt_to_app_run(monkeypatch, tmp_path):

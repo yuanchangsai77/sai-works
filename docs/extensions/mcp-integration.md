@@ -4,7 +4,7 @@
 
 本文档只负责 MCP 专项设计，重点回答：
 
-- MCP 在 `testcode` 中通过哪些模块接入
+- MCP 在 `AgentForge` 中通过哪些模块接入
 - discovery、transport、client、manager、adapter、provider 如何分层
 - MCP tool 和 resource 如何复用现有 runtime 的 policy、approval、logger、prompt discipline
 
@@ -15,7 +15,7 @@
 - roadmap 优先级与阶段目标看 `docs/roadmap.md`
 - tool 字段放置规则看 `docs/reference/tool-contract.md`
 
-本文档定义 `testcode` 中 MCP 接入的当前契约、模块拆分和运行时职责。重点不是“把外部
+本文档定义 `AgentForge` 中 MCP 接入的当前契约、模块拆分和运行时职责。重点不是“把外部
 tool 接进来能跑”，而是让 MCP 稳定复用现有 runtime 的 tool、policy、logger、
 session 和 prompt 约束。未完成事项只在“当前实现边界”中列出，优先级由总路线图维护。
 
@@ -79,7 +79,7 @@ MCP 协议交互负责：
 - `resources/list`
 - `resources/read`
 
-`testcode` runtime 负责：
+`AgentForge` runtime 负责：
 
 - tool 注册
 - risk/policy
@@ -142,7 +142,7 @@ src/testcode/mcp/
   client.py        单 server MCP client，负责协议调用
   manager.py       多 server 生命周期管理、缓存和关闭
   discovery.py     tool/resource descriptor 的懒发现、缓存与刷新策略
-  adapter.py       MCP schema -> testcode Tool / Resource adapter
+  adapter.py       MCP schema -> AgentForge Tool / Resource adapter
   provider.py      MCPResourceProvider 与兼容性 MCPToolProvider/状态接口
 
 src/testcode/capabilities/

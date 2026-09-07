@@ -2,11 +2,11 @@
 
 ## 状态与用途
 
-本目录描述 `testcode`、API Control Board（`~/test`）和未来 Device Fabric 组合后的长期方向。
+本目录描述 `AgentForge`、API Control Board（`~/test`）和未来 Device Fabric 组合后的长期方向。
 它是探索性设计，不表示对应能力已经实现，也不承诺当前示例会直接成为最终 API。
 
-当前行为以 [testcode 总体架构](../architecture.md)和各专项文档为准；近期优先级以
-[testcode 路线图](../roadmap.md)为准。未来设计不能绕过当前已建立的安全、能力激活、日志和
+当前行为以 [AgentForge 总体架构](../architecture.md)和各专项文档为准；近期优先级以
+[AgentForge 路线图](../roadmap.md)为准。未来设计不能绕过当前已建立的安全、能力激活、日志和
 上下文预算边界。
 
 ## 设计成熟度

@@ -1,4 +1,4 @@
-"""testcode package."""
+"""AgentForge package."""
 
 __version__ = "0.2.0"
 

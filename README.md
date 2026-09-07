@@ -1,6 +1,6 @@
-# testcode
+# AgentForge
 
-`testcode` is an LLM-driven CLI workbench. The CLI itself does not own decision-making intelligence. It provides a controlled runtime that collects context, delegates reasoning to a large model, executes approved tools, and returns observable results to the user.
+`AgentForge` is an LLM-driven CLI workbench. The CLI itself does not own decision-making intelligence. It provides a controlled runtime that collects context, delegates reasoning to a large model, executes approved tools, and returns observable results to the user.
 
 ## Architecture
 
@@ -34,7 +34,7 @@ Detailed design is in [docs/architecture.md](docs/architecture.md).
 | 字段参考 | [工具契约](docs/reference/tool-contract.md) | Tool 定义、结果、metadata 和摘要的字段流向 | 工具实现教程 |
 | 扩展设计 | [运行时扩展](docs/extensions/runtime-interfaces.md) | ContextLoader、ToolProvider、ResourceProvider 通用边界 | MCP、Skill 的内部设计 |
 | 扩展设计 | [能力仓库](docs/extensions/capability-warehouse.md) | 工具箱、渐进披露、激活和回收策略 | transport 或 Skill 文件格式 |
-| 目标架构 | [未来平台蓝图](docs/future/README.md) | `testcode`、模型网关与未来 Device Fabric 的跨项目边界、协议需求和演进方案 | 当前已实现行为和近期优先级 |
+| 目标架构 | [未来平台蓝图](docs/future/README.md) | `AgentForge`、模型网关与未来 Device Fabric 的跨项目边界、协议需求和演进方案 | 当前已实现行为和近期优先级 |
 | 专项设计 | [MCP 集成](docs/extensions/mcp-integration.md) | MCP transport、discovery、协议、安全和生命周期 | 全局 roadmap |
 | 专项设计 | [Skill 系统](docs/extensions/skill-system.md) | Skill 格式、来源、箱内资产及激活语义 | 通用仓库策略 |
 | 当前交互 | [TUI 当前行为](docs/interaction/tui-current.md) | 终端交互、输入编辑、重绘和兼容性边界 | runtime orchestration |
@@ -63,7 +63,7 @@ src/testcode/
 
 Requirements: Python 3.11 or newer.
 
-Create a project-local virtual environment and install `testcode` in editable
+Create a project-local virtual environment and install `AgentForge` in editable
 mode:
 
 ```bash
@@ -71,10 +71,14 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e .
 ```
 
+The installed command is `agent-forge`. The legacy `testcode` command, Python
+module, `TESTCODE_*` environment variables, and `.testcode/` data directory are
+retained for backward compatibility.
+
 Run a single request:
 
 ```bash
-.venv/bin/testcode --once "summarize this repository"
+.venv/bin/agent-forge --once "summarize this repository"
 ```
 
 Single-request mode also creates and closes a persisted session, so delegated
@@ -135,7 +139,7 @@ Add explicit context files, directories, or globs:
 PYTHONPATH=src python3 -m testcode --context README.md --context "docs/*.md" "summarize these docs"
 ```
 
-At the start of each run, `testcode` also injects bounded context from
+At the start of each run, `AgentForge` also injects bounded context from
 project `AGENTS.md` rules, common project markers, git status, and a compact
 workspace tree.
 
@@ -150,7 +154,7 @@ PYTHONPATH=src python3 -m testcode --mode auto "apply low-risk file edits automa
 ## Connect To An OpenAI-Compatible Endpoint
 
 Start your OpenAI-compatible endpoint and configure the `.env` file in the
-`testcode` source tree with its base URL:
+`AgentForge` source tree with its base URL:
 
 ```env
 TESTCODE_MODEL_BASE_URL=http://127.0.0.1:3000
@@ -163,10 +167,10 @@ TESTCODE_MODE=confirm
 
 Behavior:
 
-- `testcode` automatically loads `.env` beside the source checkout; an arbitrary
+- `AgentForge` automatically loads `.env` beside the source checkout; an arbitrary
   target workspace's `.env` is not loaded automatically
-- If `TESTCODE_MODEL_BASE_URL` is still not set, `testcode` keeps using `StubModelClient`
-- If `TESTCODE_MODEL_BASE_URL` is set, `testcode` sends requests to `POST /v1/chat/completions`
+- If `TESTCODE_MODEL_BASE_URL` is still not set, `AgentForge` keeps using `StubModelClient`
+- If `TESTCODE_MODEL_BASE_URL` is set, `AgentForge` sends requests to `POST /v1/chat/completions`
 - `TESTCODE_MODEL_TIMEOUT` defaults to 60 seconds. It is the total timeout for JSON responses and the connection,
   first-byte, and inactivity timeout for SSE; active SSE traffic refreshes the inactivity window.
 - `TESTCODE_MODEL_STREAM_MAX_SECONDS` is the independent SSE wall-clock safety limit and defaults to 900 seconds.
@@ -189,10 +193,10 @@ Behavior:
 Run:
 
 ```bash
-.venv/bin/testcode "summarize this repository"
+.venv/bin/agent-forge "summarize this repository"
 ```
 
-If you pass an initial prompt without `--once`, `testcode` answers that prompt and then stays in interactive conversation mode. Type `exit` or `quit` to leave.
+If you pass an initial prompt without `--once`, `AgentForge` answers that prompt and then stays in interactive conversation mode. Type `exit` or `quit` to leave.
 
 Interactive conversations are saved under the package/source checkout's
 `.testcode/sessions/` directory; this is not the active target workspace when
@@ -202,10 +206,10 @@ reopen the most recently updated one.
 
 If you prefer interactive selection, run `PYTHONPATH=src python3 -m testcode --resume` without an id and pick a numbered session from the list.
 
-For bash completion of `testcode` flags, source [`contrib/testcode-completion.bash`](contrib/testcode-completion.bash) from the repository root:
+For bash completion of `AgentForge` flags, source [`contrib/agent-forge-completion.bash`](contrib/agent-forge-completion.bash) from the repository root:
 
 ```bash
-source contrib/testcode-completion.bash
+source contrib/agent-forge-completion.bash
 ```
 
 ## Core Tools
@@ -232,15 +236,15 @@ capabilities rather than defining whether a core tool exists.
 
 每个交互会话最多维护一个串行的 Bash 会话，以保留工作目录和环境变量。
 在 POSIX/Linux 环境中，该 Bash 在独立进程组中运行：正常退出、输入阶段的 Ctrl+C、
-执行阶段的 Ctrl+C 以及命令超时时，testcode 会终止整个进程组，而不是只终止 Bash
+执行阶段的 Ctrl+C 以及命令超时时，AgentForge 会终止整个进程组，而不是只终止 Bash
 主进程。因此由该会话启动的普通后台子进程也会一并停止。超时后会立即重置为干净的
 Bash，后续命令继续在该新 Bash 中执行。
 完整的终止时机、并发边界和安全边界见
 [Shell 会话生命周期](docs/core/shell-session-lifecycle.md)。
 
-这是一种进程生命周期管理机制，不是操作系统级沙盒：命令仍以启动 testcode 的用户
+这是一种进程生命周期管理机制，不是操作系统级沙盒：命令仍以启动 AgentForge 的用户
 权限执行。对不可信代码或需要限制文件、网络和资源访问的任务，应在容器或系统级
-沙盒中运行 testcode。
+沙盒中运行 AgentForge。
 
 Concrete tool implementations live under `src/testcode/tools/builtins/`.
 Each built-in tool is described in its own module and exported through a

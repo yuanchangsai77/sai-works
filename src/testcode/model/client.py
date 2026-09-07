@@ -46,7 +46,7 @@ class StubModelClient:
         summary = session.tool_results[-1].output
         return ModelReply(
             message=(
-                "testcode architecture scaffold is ready. "
+                "AgentForge architecture scaffold is ready. "
                 f"Initial workspace inspection: {summary}"
             ),
             done=True,

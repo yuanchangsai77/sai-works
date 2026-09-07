@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "testcode"
+name = "agent-forge"
 version = "0.2.0"
 description = "An LLM-driven CLI workbench scaffold."
 readme = "README.md"
@@ -13,6 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
+agent-forge = "testcode.__main__:main"
 testcode = "testcode.__main__:main"
 
 [tool.setuptools]

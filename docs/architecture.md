@@ -1,10 +1,10 @@
-# testcode 核心架构
+# AgentForge 核心架构
 
 ## 文档职责
 
 本文档只回答三个问题：
 
-- `testcode` runtime 由哪些层组成
+- `AgentForge` runtime 由哪些层组成
 - 每一层的职责边界是什么
 - 关键对象和数据流如何协作
 
@@ -22,7 +22,7 @@
 
 ## 1. 产品定位
 
-`testcode` is a large-model-driven CLI workbench. It is not an autonomous decision engine. Its responsibility is to:
+`AgentForge` is a large-model-driven CLI workbench. It is not an autonomous decision engine. Its responsibility is to:
 
 - receive user intent from the command line
 - collect execution context from the local environment

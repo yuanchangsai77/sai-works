@@ -400,8 +400,8 @@ def test_print_exit_info(tmp_path):
         assert "200" in output_str
         assert "Total Tokens:" in output_str
         assert "300" in output_str
-        assert "testcode --resume session-xyz" in output_str
-        assert "testcode --last" in output_str
+        assert "agent-forge --resume session-xyz" in output_str
+        assert "agent-forge --last" in output_str
         
     finally:
         sys.stdout = original_stdout

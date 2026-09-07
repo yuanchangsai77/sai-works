@@ -1,4 +1,4 @@
-_testcode_completions()
+_agent_forge_completions()
 {
     local cur prev
     cur="${COMP_WORDS[COMP_CWORD]}"
@@ -27,5 +27,6 @@ _testcode_completions()
     COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
 }
 
-complete -F _testcode_completions testcode
-complete -F _testcode_completions python3
+complete -F _agent_forge_completions agent-forge
+complete -F _agent_forge_completions testcode
+complete -F _agent_forge_completions python3

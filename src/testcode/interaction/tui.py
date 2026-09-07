@@ -527,7 +527,7 @@ class TUIConsolePresenter(ConsolePresenter):
 
     def show_user_prompt(self, prompt: str) -> None:
         lines = self.prompt_box.wrap_prompt_value(prompt)
-        prompt_lbl = f" {Ansi.CYAN}testcode>{Ansi.RESET}"
+        prompt_lbl = f" {Ansi.CYAN}AgentForge>{Ansi.RESET}"
         background = "\033[48;5;236m"
         blank = f"{background}\033[K{Ansi.RESET}"
         self._print(blank)
@@ -542,7 +542,7 @@ class TUIConsolePresenter(ConsolePresenter):
         self._pending_prompt = request.prompt
         self._cwd = request.cwd
         lines = self.prompt_box.wrap_prompt_value(request.prompt)
-        prompt = f" {Ansi.CYAN}testcode>{Ansi.RESET}"
+        prompt = f" {Ansi.CYAN}AgentForge>{Ansi.RESET}"
         background = "\033[48;5;236m"
         blank = f"{background}\033[K{Ansi.RESET}"
         self._print(blank)
@@ -923,7 +923,7 @@ class TUIConsolePresenter(ConsolePresenter):
         )
 
     def _composer_rows(self, columns: int) -> tuple[list[str], int, int]:
-        prompt = " testcode> "
+        prompt = " AgentForge> "
         plain_lines, cursor_row, cursor_column, start = self._wrap_composer(columns)
         rows: list[str] = []
         background = "\033[48;5;236m"
@@ -1007,7 +1007,7 @@ class TUIConsolePresenter(ConsolePresenter):
 
     def _wrap_composer(self, columns: int) -> tuple[list[str], int, int, int]:
         columns = max(columns, 2)
-        prompt_width = _display_width(" testcode> ")
+        prompt_width = _display_width(" AgentForge> ")
         lines = [""]
         positions: list[tuple[int, int]] = [(0, 0)]
         row = 0

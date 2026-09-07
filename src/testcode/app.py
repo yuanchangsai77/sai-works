@@ -268,11 +268,11 @@ def create_app(
 
 def main() -> None:
     try:
-        parser = argparse.ArgumentParser(description="testcode: LLM-driven CLI workbench scaffold")
+        parser = argparse.ArgumentParser(description="AgentForge: LLM-driven CLI workbench scaffold")
         parser.add_argument(
             "--version",
             action="version",
-            version=f"testcode {__version__}",
+            version=f"AgentForge {__version__}",
         )
         parser.add_argument("prompt", nargs="*", help="Task to send into the CLI workbench")
         parser.add_argument(
@@ -362,7 +362,7 @@ def main() -> None:
                 resumed_session = app.load_session(session_id) or resumed_session
 
         if args.once:
-            prompt = initial_prompt or input("testcode> ").strip()
+            prompt = initial_prompt or input("AgentForge> ").strip()
             if not prompt:
                 return
             session_store = getattr(app, "session_store", None)

@@ -12,7 +12,7 @@
 `docs/architecture.md`、`docs/roadmap.md`、`docs/extensions/mcp-integration.md`、
 `docs/extensions/skill-system.md` 中展开。
 
-本文档定义 `testcode` tool 字段的用途和流向。新增内置 tool、Skill 派生 tool 或 MCP tool 适配层时，先按这里的契约决定信息应该放在哪里。
+本文档定义 `AgentForge` tool 字段的用途和流向。新增内置 tool、Skill 派生 tool 或 MCP tool 适配层时，先按这里的契约决定信息应该放在哪里。
 
 ## 字段流向
 
