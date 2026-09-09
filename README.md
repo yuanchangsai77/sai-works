@@ -218,6 +218,8 @@ The built-in tool set exposes structured schemas, risk levels, stable error
 codes, and workspace-bounded path handling:
 
 - `list_dir`, `read_file`, `file_info`: read-only workspace file inspection
+- `workspace_open`: explicitly switch the active workspace directory for the current session
+  (see [session workspace lifecycle](docs/core/session-workspaces.md))
 - `find_files`, `search_text`: bounded file and text search
 - `git_status`, `git_diff`: high-frequency read-only Git inspection
 - `shell_exec`: execute a command in the workspace

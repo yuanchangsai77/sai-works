@@ -10,7 +10,7 @@ from testcode.interaction.presenter import ConsolePresenter
 from testcode.orchestration.subagents import SubagentCoordinator, SubagentLaunchSpec
 from testcode.orchestration.subagent_runner import SubagentRunner, _issue_subagent_grant
 from testcode.sessions import SessionClusterStore, SessionImageStore, SessionStore
-from testcode.types import EvidenceRecord, ExecutionSummary, ModelReply, SessionRunTrace, TaskCheckpoint, ToolResult, UserRequest
+from testcode.types import EvidenceRecord, ExecutionSummary, ModelReply, RuntimeBlocker, SessionRunTrace, TaskCheckpoint, ToolResult, UserRequest
 from testcode.tools.base import ToolContext
 from testcode.tools.subagents import build_subagent_tools
 from testcode.types import ToolAction
@@ -428,6 +428,62 @@ def test_parent_resumes_same_child_with_persisted_context_and_new_attempt(tmp_pa
     assert member.state == "ready"
     assert member.task_summary == "fix click handler"
     assert member.attempt == 2
+
+
+def test_subagent_default_effects_do_not_infer_write_from_task_text(tmp_path):
+    sessions, _, _, coordinator = build_coordinator(tmp_path)
+    parent = sessions.create(cwd=str(tmp_path))
+
+    coordinator.launch_subagent(parent, SubagentLaunchSpec(task_summary="implement and test the fix"))
+
+    member = coordinator.snapshot(parent).members[1]
+    assert member.allowed_effects == ["read"]
+    assert member.required_evidence == ["response"]
+
+
+def test_parent_can_resume_a_blocked_subagent_with_explicit_effect_upgrade(tmp_path):
+    sessions, _, _, coordinator = build_coordinator(tmp_path)
+    parent = sessions.create(cwd=str(tmp_path))
+    child = coordinator.launch_subagent(parent, SubagentLaunchSpec(
+        task_summary="implement the fix", required_evidence=["test", "artifact"]
+    ))
+    coordinator.update_member_state(child, "blocked")
+
+    coordinator.resume_subagent(
+        parent,
+        child.session_id,
+        "apply the reviewed fix",
+        allowed_effects=["read", "write"],
+    )
+
+    member = coordinator.snapshot(parent).members[1]
+    assert member.state == "ready"
+    assert member.allowed_effects == ["read", "write"]
+    assert member.required_evidence == ["test", "artifact"]
+
+
+def test_runner_preserves_capability_request_when_runtime_blockers_exist(tmp_path):
+    _, _, _, coordinator = build_coordinator(tmp_path)
+    runner = SubagentRunner(coordinator, lambda _session, _grant: None)
+    summary = ExecutionSummary(
+        "write access required",
+        [
+            ToolResult(
+                "subagent_request_effects",
+                False,
+                "Additional delegated effects require parent review before this subagent can continue.",
+                "delegated_capability_upgrade_requested",
+                metadata={"requested_effects": ["write"]},
+            )
+        ],
+        outcome="blocked",
+        blockers=[RuntimeBlocker("delegated_capability_upgrade_requested", "generic blocker")],
+    )
+
+    blocker = runner._structured_blocker(summary, "blocked", [], "")
+
+    assert blocker["action"] == "resume_with_effects"
+    assert blocker["requested_effects"] == ["write"]
 
 
 def test_runner_rejects_irrelevant_completion_and_requests_same_session_resume(tmp_path):

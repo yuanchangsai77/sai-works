@@ -11,6 +11,8 @@ from .read_file import tool as read_file_tool
 from .run_tests import tool as run_tests_tool
 from .search_text import tool as search_text_tool
 from .shell_exec import tool as shell_exec_tool
+from .subagent_request_effects import tool as subagent_request_effects_tool
+from .workspace_open import tool as workspace_open_tool
 
 __all__ = [
     "file_info_tool",
@@ -24,4 +26,6 @@ __all__ = [
     "run_tests_tool",
     "search_text_tool",
     "shell_exec_tool",
+    "subagent_request_effects_tool",
+    "workspace_open_tool",
 ]

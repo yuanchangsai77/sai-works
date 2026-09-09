@@ -206,7 +206,13 @@ def test_completion_gate_requires_workspace_change_for_change_request(tmp_path):
         logger=logger,
     )
 
-    summary = engine.execute(UserRequest(prompt="create note.md", cwd=str(tmp_path)))
+    summary = engine.execute(
+        UserRequest(
+            prompt="create note.md",
+            cwd=str(tmp_path),
+            metadata={"requires_file_changes": True},
+        )
+    )
 
     assert model.calls == 3
     assert summary.outcome == "completed"
@@ -214,6 +220,33 @@ def test_completion_gate_requires_workspace_change_for_change_request(tmp_path):
     assert summary.checkpoint.artifacts == []
     assert any(item.kind == "workspace_change" for item in summary.checkpoint.evidence)
     assert (tmp_path / "note.md").read_text(encoding="utf-8") == "ready\n"
+
+
+def test_completion_gate_allows_diagnostic_of_a_generation_endpoint_without_a_patch(tmp_path):
+    class DiagnosticModel:
+        def respond(self, _session):
+            return ModelReply(message="The projection record references a missing V2 plan.", done=True)
+
+    logger = InMemoryLogger()
+    engine = ExecutionEngine(
+        model=DiagnosticModel(),
+        tools=build_builtin_registry(logger),
+        guardrails=Guardrails(policy=DefaultPolicy(mode="auto"), logger=logger),
+        logger=logger,
+    )
+
+    summary = engine.execute(
+        UserRequest(
+            prompt=(
+                "项目中生成周复盘接口 /v1/ai-coach/weekly-reviews/generate 报错，"
+                "看下什么原因"
+            ),
+            cwd=str(tmp_path),
+        )
+    )
+
+    assert summary.outcome == "completed"
+    assert not any(item.name == "completion_gate" for item in summary.tool_results)
 
 
 def test_completion_gate_checks_evidence_after_done_reply_actions(tmp_path):
@@ -246,7 +279,13 @@ def test_completion_gate_checks_evidence_after_done_reply_actions(tmp_path):
         tools=build_builtin_registry(logger),
         guardrails=Guardrails(policy=DefaultPolicy(mode="auto"), logger=logger),
         logger=logger,
-    ).execute(UserRequest(prompt="create note.md", cwd=str(tmp_path)))
+        ).execute(
+            UserRequest(
+                prompt="create note.md",
+                cwd=str(tmp_path),
+                metadata={"requires_file_changes": True},
+            )
+        )
 
     assert model.calls == 2
     assert summary.outcome == "completed"
@@ -268,7 +307,13 @@ def test_prior_completion_rejection_does_not_hide_missing_evidence(tmp_path):
         tools=build_builtin_registry(logger),
         guardrails=Guardrails(policy=DefaultPolicy(mode="auto"), logger=logger),
         logger=logger,
-    ).execute(UserRequest(prompt="create note.md", cwd=str(tmp_path)))
+        ).execute(
+            UserRequest(
+                prompt="create note.md",
+                cwd=str(tmp_path),
+                metadata={"requires_file_changes": True},
+            )
+        )
 
     assert summary.outcome == "stalled"
     assert summary.checkpoint.unmet_deliverables == ["workspace_change"]
@@ -1639,6 +1684,400 @@ def test_engine_requests_workspace_access_for_outside_read_path(tmp_path):
     assert summary.tool_results[0].metadata["workspace_grant"] == str(outside.resolve())
 
 
+def test_explicit_workspace_open_persists_session_state_for_a_new_task(tmp_path):
+    external = tmp_path.parent / "external-project"
+    external.mkdir()
+    (external / "plan.txt").write_text("plan", encoding="utf-8")
+
+    class OpenExternalThenFinish:
+        calls = 0
+
+        def respond(self, _session):
+            self.calls += 1
+            if self.calls == 1:
+                return ModelReply(
+                    message="open external project",
+                    actions=[ToolAction(name="workspace_open", arguments={"path": str(external)})],
+                )
+            if self.calls == 2:
+                return ModelReply(
+                    message="read discovered file",
+                    actions=[ToolAction(name="read_file", arguments={"path": "plan.txt"})],
+                )
+            return ModelReply(message="Diagnosis complete; no change is needed.", done=True)
+
+    logger = InMemoryLogger()
+    approvals = []
+    engine = ExecutionEngine(
+        model=OpenExternalThenFinish(),
+        tools=build_builtin_registry(logger),
+        guardrails=Guardrails(policy=DefaultPolicy(), logger=logger),
+        logger=logger,
+        approval_callback=lambda action, _reason: approvals.append(action.name) or True,
+    )
+    first = engine.execute(UserRequest(prompt="inspect external project", cwd=str(tmp_path)))
+
+    assert first.outcome == "completed"
+    assert first.workspace_state.active_root == str(external.resolve())
+    assert first.workspace_state.approved_roots == [str(external.resolve())]
+    assert approvals == ["workspace_access"]
+    assert any(item.metadata.get("path") == str(external / "plan.txt") for item in first.tool_results)
+
+    class NewTaskRead:
+        def respond(self, _session):
+            return ModelReply(
+                message="read remembered project file",
+                actions=[ToolAction(name="read_file", arguments={"path": "plan.txt"})],
+                done=True,
+            )
+
+    engine.model = NewTaskRead()
+    resumed = engine.execute(
+        UserRequest(
+            prompt="read the project plan",
+            cwd=str(tmp_path),
+            metadata={"workspace_state": first.workspace_state},
+        )
+    )
+
+    assert resumed.outcome == "completed"
+    assert resumed.tool_results[0].success is True
+    assert resumed.tool_results[0].metadata["path"] == str(external / "plan.txt")
+    assert approvals == ["workspace_access"]
+
+
+def test_workspace_open_keeps_an_unfinished_task_resumable(tmp_path):
+    external = tmp_path.parent / "resumable-external-project"
+    external.mkdir()
+    (external / "plan.txt").write_text("plan", encoding="utf-8")
+
+    class OpenWorkspace:
+        def respond(self, _session):
+            return ModelReply(
+                message="open project",
+                actions=[ToolAction(name="workspace_open", arguments={"path": str(external)})],
+            )
+
+    logger = InMemoryLogger()
+    engine = ExecutionEngine(
+        model=OpenWorkspace(),
+        tools=build_builtin_registry(logger),
+        guardrails=Guardrails(policy=DefaultPolicy(), logger=logger),
+        logger=logger,
+        approval_callback=lambda _action, _reason: True,
+        max_turns=1,
+    )
+    interrupted = engine.execute(UserRequest(prompt="inspect external project", cwd=str(tmp_path)))
+
+    assert interrupted.outcome == "exhausted"
+    assert interrupted.checkpoint.workspace_root == str(external.resolve())
+
+    class ContinueReading:
+        def respond(self, _session):
+            return ModelReply(
+                message="read plan",
+                actions=[ToolAction(name="read_file", arguments={"path": "plan.txt"})],
+                done=True,
+            )
+
+    engine.model = ContinueReading()
+    resumed = engine.execute(
+        UserRequest(
+            prompt="continue",
+            cwd=str(external),
+            metadata={
+                "workspace_state": interrupted.workspace_state,
+                "resume_state": SessionResumeState(
+                    last_outcome=interrupted.outcome,
+                    checkpoint=interrupted.checkpoint,
+                ),
+            },
+        )
+    )
+
+    assert resumed.outcome == "completed"
+    assert resumed.checkpoint.task_id == interrupted.checkpoint.task_id
+    assert resumed.tool_results[0].metadata["path"] == str(external / "plan.txt")
+
+
+def test_workspace_switch_keeps_the_session_origin_accessible(tmp_path):
+    external = tmp_path.parent / "other-project"
+    external.mkdir()
+    origin_file = tmp_path / "origin.txt"
+    origin_file.write_text("origin", encoding="utf-8")
+
+    class SwitchThenReadOrigin:
+        calls = 0
+
+        def respond(self, _session):
+            self.calls += 1
+            if self.calls == 1:
+                return ModelReply(
+                    message="open other project",
+                    actions=[ToolAction(name="workspace_open", arguments={"path": str(external)})],
+                )
+            if self.calls == 2:
+                return ModelReply(
+                    message="read origin evidence",
+                    actions=[ToolAction(name="read_file", arguments={"path": str(origin_file)})],
+                )
+            return ModelReply(message="Inspection complete.", done=True)
+
+    logger = InMemoryLogger()
+    summary = ExecutionEngine(
+        model=SwitchThenReadOrigin(),
+        tools=build_builtin_registry(logger),
+        guardrails=Guardrails(policy=DefaultPolicy(), logger=logger),
+        logger=logger,
+        approval_callback=lambda _action, _reason: True,
+    ).execute(UserRequest(prompt="compare projects", cwd=str(tmp_path)))
+
+    assert summary.workspace_state.active_root == str(external.resolve())
+    assert summary.tool_results[1].success is True
+    assert summary.tool_results[1].metadata["path"] == str(origin_file)
+
+
+def test_engine_ignores_untrusted_workspace_state_dictionary(tmp_path):
+    external = tmp_path.parent / "unapproved-project"
+    external.mkdir()
+
+    class ObserveRoot:
+        def respond(self, session):
+            return ModelReply(message=session.request.cwd, done=True)
+
+    logger = InMemoryLogger()
+    summary = ExecutionEngine(
+        model=ObserveRoot(),
+        tools=build_builtin_registry(logger),
+        guardrails=Guardrails(policy=DefaultPolicy(), logger=logger),
+        logger=logger,
+    ).execute(
+        UserRequest(
+            prompt="inspect",
+            cwd=str(tmp_path),
+            metadata={
+                "workspace_state": {
+                    "origin_root": str(tmp_path),
+                    "active_root": str(external),
+                    "approved_roots": [str(external)],
+                }
+            },
+        )
+    )
+
+    assert summary.workspace_state.active_root == str(tmp_path)
+
+
+def test_subagent_can_request_a_structured_effect_upgrade_without_gaining_it(tmp_path):
+    class RequestUpgrade:
+        def respond(self, session):
+            assert "subagent_request_effects" in {tool.name for tool in session.available_tools}
+            assert "patch" not in {tool.name for tool in session.available_tools}
+            return ModelReply(
+                message="I need write access.",
+                actions=[ToolAction(name="subagent_request_effects", arguments={"effects": ["write"]})],
+                done=True,
+            )
+
+    logger = InMemoryLogger()
+    summary = ExecutionEngine(
+        model=RequestUpgrade(),
+        tools=build_builtin_registry(logger),
+        guardrails=Guardrails(policy=DefaultPolicy(), logger=logger),
+        logger=logger,
+    ).execute(
+        UserRequest(
+            prompt="fix the file",
+            cwd=str(tmp_path),
+            metadata={"delegated_task": {"allowed_effects": ["read"], "allowed_resources": ["."]}},
+        )
+    )
+
+    assert summary.tool_results[0].error_code == "delegated_capability_upgrade_requested"
+    assert summary.tool_results[0].metadata["requested_effects"] == ["write"]
+    assert summary.outcome == "blocked"
+    assert summary.blockers[-1].error_code == "delegated_capability_upgrade_requested"
+
+
+def test_invalid_subagent_effect_contract_falls_back_to_read_only(tmp_path):
+    class InvalidContractModel:
+        def respond(self, session):
+            names = {tool.name for tool in session.available_tools}
+            assert "read_file" in names
+            assert "patch" not in names
+            return ModelReply(
+                message="try patch",
+                actions=[ToolAction(name="patch", arguments={"diff": ""})],
+                done=True,
+            )
+
+    logger = InMemoryLogger()
+    summary = ExecutionEngine(
+        model=InvalidContractModel(),
+        tools=build_builtin_registry(logger),
+        guardrails=Guardrails(policy=DefaultPolicy(), logger=logger),
+        logger=logger,
+    ).execute(
+        UserRequest(
+            prompt="fix",
+            cwd=str(tmp_path),
+            metadata={"delegated_task": {"allowed_effects": "write"}},
+        )
+    )
+
+    assert summary.outcome == "blocked"
+    assert summary.tool_results[0].error_code == "delegated_contract_invalid"
+
+
+def test_external_file_grant_does_not_replace_the_task_workspace_root(tmp_path):
+    external_file = tmp_path.parent / "external-note.txt"
+    external_file.write_text("external", encoding="utf-8")
+    (tmp_path / "local-note.txt").write_text("local", encoding="utf-8")
+
+    class ReadExternalFileThenLocalFile:
+        calls = 0
+
+        def respond(self, _session):
+            self.calls += 1
+            if self.calls == 1:
+                return ModelReply(
+                    message="read external evidence",
+                    actions=[ToolAction(name="read_file", arguments={"path": str(external_file)})],
+                )
+            if self.calls == 2:
+                return ModelReply(
+                    message="read local evidence",
+                    actions=[ToolAction(name="read_file", arguments={"path": "local-note.txt"})],
+                )
+            return ModelReply(message="Diagnosis complete.", done=True)
+
+    logger = InMemoryLogger()
+    summary = ExecutionEngine(
+        model=ReadExternalFileThenLocalFile(),
+        tools=build_builtin_registry(logger),
+        guardrails=Guardrails(policy=DefaultPolicy(), logger=logger),
+        logger=logger,
+        approval_callback=lambda _action, _reason: True,
+    ).execute(UserRequest(prompt="inspect logs", cwd=str(tmp_path)))
+
+    reads = [item for item in summary.tool_results if item.name == "read_file"]
+    assert [item.metadata["path"] for item in reads] == [
+        str(external_file),
+        str(tmp_path / "local-note.txt"),
+    ]
+    assert summary.workspace_state.active_root == str(tmp_path)
+    assert summary.workspace_state.approved_roots == [str(external_file.resolve())]
+
+
+def test_external_directory_access_does_not_switch_active_workspace(tmp_path):
+    external = tmp_path.parent / "external-evidence"
+    external.mkdir()
+    (tmp_path / "local-note.txt").write_text("local", encoding="utf-8")
+
+    class ReadExternalDirectoryThenLocalFile:
+        calls = 0
+
+        def respond(self, _session):
+            self.calls += 1
+            if self.calls == 1:
+                return ModelReply(
+                    message="inspect external evidence",
+                    actions=[ToolAction(name="list_dir", arguments={"path": str(external)})],
+                )
+            if self.calls == 2:
+                return ModelReply(
+                    message="read local evidence",
+                    actions=[ToolAction(name="read_file", arguments={"path": "local-note.txt"})],
+                )
+            return ModelReply(message="Inspection complete.", done=True)
+
+    logger = InMemoryLogger()
+    summary = ExecutionEngine(
+        model=ReadExternalDirectoryThenLocalFile(),
+        tools=build_builtin_registry(logger),
+        guardrails=Guardrails(policy=DefaultPolicy(), logger=logger),
+        logger=logger,
+        approval_callback=lambda _action, _reason: True,
+    ).execute(UserRequest(prompt="inspect evidence", cwd=str(tmp_path)))
+
+    assert summary.workspace_state.active_root == str(tmp_path)
+    assert summary.workspace_state.approved_roots == [str(external.resolve())]
+    assert summary.tool_results[1].metadata["path"] == str(tmp_path / "local-note.txt")
+
+
+def test_explicit_workspace_open_refreshes_model_context(tmp_path):
+    external = tmp_path.parent / "external-project-context"
+    external.mkdir()
+    loaded_roots = []
+    model_roots = []
+
+    class ContextLoader:
+        def load_context(self, request, _session):
+            loaded_roots.append(request.cwd)
+
+    class SelectExternalProject:
+        calls = 0
+
+        def respond(self, session):
+            self.calls += 1
+            model_roots.append(session.request.cwd)
+            if self.calls == 1:
+                return ModelReply(
+                    message="select external project",
+                    actions=[ToolAction(name="workspace_open", arguments={"path": str(external)})],
+                )
+            return ModelReply(message="External project inspected.", done=True)
+
+    logger = InMemoryLogger()
+    summary = ExecutionEngine(
+        model=SelectExternalProject(),
+        tools=build_builtin_registry(logger),
+        guardrails=Guardrails(policy=DefaultPolicy(), logger=logger),
+        logger=logger,
+        context_loaders=[ContextLoader()],
+        approval_callback=lambda _action, _reason: True,
+    ).execute(UserRequest(prompt="inspect external project", cwd=str(tmp_path)))
+
+    assert summary.outcome == "completed"
+    assert loaded_roots == [str(tmp_path), str(external)]
+    assert model_roots == [str(tmp_path), str(external)]
+
+
+def test_session_ignores_workspace_grant_metadata_not_issued_by_orchestration(tmp_path):
+    session = SessionContext(request=UserRequest(prompt="inspect", cwd=str(tmp_path)))
+    session.add_tool_result(
+        ToolResult(
+            "custom_tool",
+            True,
+            "ok",
+            metadata={"workspace_grant": str(tmp_path.parent)},
+        )
+    )
+
+    assert "task_workspace_root" not in session.checkpoint.runtime_state
+
+
+def test_session_store_persists_workspace_state_without_inheriting_it_to_new_sessions(tmp_path):
+    external = tmp_path.parent / "approved-project"
+    external.mkdir()
+    store = SessionStore(base_dir=tmp_path)
+    session = store.create(cwd=str(tmp_path))
+    session.workspace_state.active_root = str(external)
+    session.workspace_state.approved_roots = [str(external)]
+    session.cwd = str(external)
+    store.save(session)
+
+    restored = store.load(session.session_id)
+    fresh = store.create(cwd=str(tmp_path))
+
+    assert restored.workspace_state.origin_root == str(tmp_path)
+    assert restored.workspace_state.active_root == str(external)
+    assert restored.workspace_state.approved_roots == [str(external)]
+    assert fresh.workspace_state.origin_root == str(tmp_path)
+    assert fresh.workspace_state.active_root == str(tmp_path)
+    assert fresh.workspace_state.approved_roots == []
+
+
 def test_engine_requests_workspace_access_for_shell_cd_escape(tmp_path):
     class OutsideShellModel:
         def respond(self, _session):
@@ -1866,7 +2305,13 @@ def test_engine_recovers_read_duplicate_loop_for_file_change_request(tmp_path):
         logger=logger,
     )
 
-    summary = engine.execute(UserRequest(prompt="升级这个项目，生成标准项目文件夹", cwd=str(tmp_path)))
+    summary = engine.execute(
+        UserRequest(
+            prompt="升级这个项目，生成标准项目文件夹",
+            cwd=str(tmp_path),
+            metadata={"requires_file_changes": True},
+        )
+    )
 
     assert model.calls == 3
     assert summary.final_message == "created standard metadata"
@@ -2051,7 +2496,11 @@ def test_progress_guard_can_trigger_again_after_successful_write(tmp_path):
         guardrails=Guardrails(DefaultPolicy(mode="auto"), logger),
         logger=logger,
     ).execute(
-        UserRequest(prompt="create project files", cwd=str(tmp_path))
+        UserRequest(
+            prompt="create project files",
+            cwd=str(tmp_path),
+            metadata={"requires_file_changes": True},
+        )
     )
 
     recoveries = [

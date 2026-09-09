@@ -14,28 +14,28 @@ from testcode.types import ToolResult
     ("prompt", "project_request", "file_changes"),
     [
         ("review the code changes", True, False),
-        ("fix the project tests", True, True),
-        ("生成标准项目文件夹", True, True),
+        ("fix the project tests", True, False),
+        ("生成标准项目文件夹", True, False),
         ("What makes a successful science project?", False, False),
         ("read CHANGELOG.md", True, False),
-        ("create a project", True, True),
-        ("add a file", True, True),
+        ("create a project", True, False),
+        ("add a file", True, False),
         ("禁止修改任何文件，只输出审查摘要", True, False),
         ("请勿编辑文档，仅阅读并总结", True, False),
         ("不要修改或删除任何文件，只做审查", True, False),
         ("请勿编辑、创建或删除文件，只读检查", True, False),
-        ("无需修改源码，直接写报告", True, True),
-        ("modify the project", True, True),
-        ("generate project files", True, True),
-        ("upgrade this project", True, True),
-        ("patch the code", True, True),
-        ("scaffold a project", True, True),
-        ("delete the file", True, True),
-        ("remove project code", True, True),
-        ("rename app.py", True, True),
-        ("move the source folder", True, True),
-        ("删除这个文件", True, True),
-        ("重命名项目目录", True, True),
+        ("无需修改源码，直接写报告", True, False),
+        ("modify the project", True, False),
+        ("generate project files", True, False),
+        ("upgrade this project", True, False),
+        ("patch the code", True, False),
+        ("scaffold a project", True, False),
+        ("delete the file", True, False),
+        ("remove project code", True, False),
+        ("rename app.py", True, False),
+        ("move the source folder", True, False),
+        ("删除这个文件", True, False),
+        ("重命名项目目录", True, False),
     ],
 )
 def test_request_intent_classifier(prompt, project_request, file_changes):
@@ -55,6 +55,20 @@ def test_request_intent_classifier_accepts_explicit_overrides():
     )
 
     assert intent == RequestIntent(project_request=True, file_changes=True)
+
+
+def test_request_intent_classifier_does_not_turn_a_write_request_into_an_evidence_contract():
+    intent = RequestIntentClassifier().classify("create a project")
+
+    assert intent == RequestIntent(project_request=True, file_changes=False)
+
+
+def test_diagnostic_request_with_generation_endpoint_does_not_require_a_file_change():
+    intent = RequestIntentClassifier().classify(
+        "项目中生成周复盘接口 /v1/ai-coach/weekly-reviews/generate 报错，看下什么原因"
+    )
+
+    assert intent == RequestIntent(project_request=True, file_changes=False)
 
 
 def test_progress_policy_triggers_on_first_duplicate_read_for_change_request():

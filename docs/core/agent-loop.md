@@ -52,7 +52,7 @@
 
 ## 修改任务的进度纠正
 
-当请求被识别为文件修改任务，模型第二次请求完全相同的只读上下文工具时，默认进度策略
+当调用方显式声明文件修改证据要求，模型第二次请求完全相同的只读上下文工具时，默认进度策略
 会追加 `progress_required`：
 
 - 提醒模型使用 session history 中已有结果。
@@ -94,7 +94,8 @@ runtime 计算的 outcome、结构化 blocker、task checkpoint、artifact 和�
 - 当前 conversation 和工具结果先由 `ContextPackager` 做总字符预算和近期消息选择。长 action
   argument 不再重复内联，只保留长度和摘要哈希；结构化优先级、语义摘要与按需 artifact 回查仍需
   继续增强。
-- checkpoint 已记录 required evidence 和 unmet deliverables。修改请求默认要求 workspace change；模型
+- checkpoint 已记录 required evidence 和 unmet deliverables。自然语言请求不自动产生写入证据要求；调用方
+  显式声明修改合同后才要求 workspace change。模型
   若判断现状已经满足，必须先取得当前 revision 的 read evidence，再给出明确的 no-change 理由。更复杂
   的领域交付谓词仍需逐类扩展。
 - checkpoint 的恢复以 task id 和 workspace root 为边界，不能仅凭上一 run 未完成就继承。证据账本记录

@@ -471,6 +471,28 @@ class SubagentRunner:
     ) -> dict[str, object]:
         if outcome == "completed":
             return {}
+        capability_request = next(
+            (
+                result
+                for result in reversed(summary.tool_results)
+                if result.name == "subagent_request_effects"
+                and result.error_code == "delegated_capability_upgrade_requested"
+                and not result.success
+                and isinstance(result.metadata.get("requested_effects"), list)
+                and result.metadata["requested_effects"]
+            ),
+            None,
+        )
+        if capability_request is not None:
+            requested_effects = capability_request.metadata["requested_effects"]
+            if all(isinstance(effect, str) and effect for effect in requested_effects):
+                return {
+                    "error_code": capability_request.error_code or outcome,
+                    "tool": capability_request.name,
+                    "summary": _bounded_summary(capability_request.output),
+                    "action": "resume_with_effects",
+                    "requested_effects": list(dict.fromkeys(requested_effects)),
+                }
         runtime_blockers = getattr(summary, "blockers", [])
         if runtime_blockers:
             blocker = runtime_blockers[-1]
@@ -489,6 +511,20 @@ class SubagentRunner:
             tool_name = failed.name
             if not detail:
                 detail = failed.output
+            requested_effects = failed.metadata.get("requested_effects")
+            requested_effect = failed.metadata.get("requested_effect")
+            if isinstance(requested_effect, str) and requested_effect:
+                requested_effects = [requested_effect]
+            if isinstance(requested_effects, list) and all(
+                isinstance(effect, str) and effect for effect in requested_effects
+            ):
+                return {
+                    "error_code": error_code or outcome,
+                    "tool": tool_name,
+                    "summary": _bounded_summary(detail),
+                    "action": "resume_with_effects",
+                    "requested_effects": list(dict.fromkeys(requested_effects)),
+                }
         if not detail and unresolved:
             detail = unresolved[0]
         if not detail:

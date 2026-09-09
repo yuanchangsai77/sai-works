@@ -16,6 +16,8 @@ from .builtins import (
     run_tests_tool,
     search_text_tool,
     shell_exec_tool,
+    subagent_request_effects_tool,
+    workspace_open_tool,
 )
 
 
@@ -52,6 +54,8 @@ class BuiltinToolProvider:
             search_text_tool(getattr(self.limits, "search_results", 200)),
             git_status_tool(),
             git_diff_tool(),
+            workspace_open_tool(),
+            subagent_request_effects_tool(),
             shell_exec_tool(),
             patch_tool(),
         ]

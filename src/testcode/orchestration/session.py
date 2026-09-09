@@ -6,7 +6,15 @@ from dataclasses import dataclass, field
 
 from typing import TYPE_CHECKING
 
-from ..types import EvidenceRecord, RuntimeBlocker, TaskCheckpoint, ToolDefinition, ToolResult, UserRequest
+from ..types import (
+    EvidenceRecord,
+    RuntimeBlocker,
+    TaskCheckpoint,
+    ToolDefinition,
+    ToolResult,
+    UserRequest,
+    WorkspaceSessionState,
+)
 
 if TYPE_CHECKING:
     from ..capabilities.model import InstructionContent
@@ -16,6 +24,7 @@ if TYPE_CHECKING:
 @dataclass(slots=True)
 class SessionContext:
     request: UserRequest
+    workspace_state: WorkspaceSessionState = field(default_factory=WorkspaceSessionState)
     available_tools: list[ToolDefinition] = field(default_factory=list)
     history: list[str] = field(default_factory=list)
     tool_results: list[ToolResult] = field(default_factory=list)

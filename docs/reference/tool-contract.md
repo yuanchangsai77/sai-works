@@ -104,6 +104,16 @@ ToolResult(
 - `read_file_summary()` 基于 metadata 生成用户 run summary，例如 `read /home/changsai/testcode/README.md (4096 bytes truncated)`；这个摘要不写回 `ToolResult.output`。
 - 如果读取的是二进制文件，工具返回 `success=False`、`error_code="binary_file"`，`output` 放模型可见的失败原因，`metadata` 保留路径和文件大小供日志/摘要使用。
 
+## 会话控制工具：`workspace_open`
+
+`workspace_open` 是读取级的结构化会话控制工具，参数为目录 `path`。成功时 `output` 只确认活动
+工作区已更新，`metadata.path` 保存经边界校验后的目录。Engine 只在该工具成功时消费此字段并更新
+会话级 workspace state；其他工具的 metadata 不能改变授权或活动工作区。
+
+目标越出活动工作区且不在本会话已批准根目录中时，普通路径边界会先返回
+`path_outside_workspace`，运行时据此发起 `workspace_access` 审批。批准后重试同一 action；成功打开
+目录会刷新项目 context。仅访问外部路径的读取、写入或搜索不会触发工作区切换。
+
 ## 新增 Tool Checklist
 
 新增 tool 时逐项确认：

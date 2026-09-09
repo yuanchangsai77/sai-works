@@ -36,6 +36,7 @@ class ModelPromptBuilder:
             "- Treat workspace context as irrelevant for non-project requests such as routes, weather, general knowledge, or external service lookups.",
             "- Do not repeat the same tool call if the session history already contains the needed result.",
             "- If a tool result has error_code path_outside_workspace or approval_required for workspace_access, explain that access outside the current workspace needs user approval or a session started from that path.",
+            "- Use workspace_open only when the task needs a directory to become the active workspace; ordinary external access does not change the active workspace.",
             "- If a tool result has error_code approval_required, explain that the tool needs approval instead of retrying it.",
             "- If a tool result has error_code approval_denied, state that the user declined the action. Do not describe it as waiting for approval, ask the user to approve it, or retry it.",
             "- If a tool result has error_code duplicate_tool_call, use the previous result in session history or stop with a concise explanation.",

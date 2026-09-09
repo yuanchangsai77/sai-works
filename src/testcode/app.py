@@ -377,6 +377,7 @@ def main() -> None:
                 )
                 metadata["session_trace"] = list(getattr(resumed_session, "trace", [])[-6:])
                 metadata["resume_state"] = getattr(resumed_session, "resume_state", None)
+                metadata["workspace_state"] = getattr(resumed_session, "workspace_state", None)
             metadata["context_paths"] = list(args.context)
             request = UserRequest(prompt=prompt, cwd=cwd, metadata=metadata)
             try:

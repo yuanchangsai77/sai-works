@@ -260,6 +260,11 @@ class ShellSession:
 def _shell_session(context: ToolContext, cwd: Path) -> ShellSession:
     existing = context.state.get("shell_session")
     if isinstance(existing, ShellSession):
+        if existing.context.cwd != context.cwd:
+            existing.close()
+            session = ShellSession(context, cwd)
+            context.state["shell_session"] = session
+            return session
         existing.context = context
         return existing
     session = ShellSession(context, cwd)

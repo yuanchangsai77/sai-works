@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
 
-from ..intent import RequestIntentClassifier
 from ..sessions.cluster import (
     ClusterMember,
     SessionCluster,
@@ -43,7 +42,6 @@ class SubagentCoordinator:
         self.session_store = session_store
         self.cluster_store = cluster_store
         self.image_store = image_store
-        self._intent_classifier = RequestIntentClassifier()
 
     def ensure_cluster(self, session: StoredSession) -> SessionCluster:
         if session.cluster_id:
@@ -107,6 +105,8 @@ class SubagentCoordinator:
         parent: StoredSession,
         session_id: str,
         task_summary: str,
+        *,
+        allowed_effects: list[str] | None = None,
     ) -> StoredSession:
         """Continue an existing direct child with its persisted context and trace."""
         cluster = self.ensure_cluster(parent)
@@ -119,7 +119,22 @@ class SubagentCoordinator:
         child = self.session_store.load(session_id)
         if child is None:
             raise KeyError(f"unknown subagent session: {session_id}")
-        self.cluster_store.resume_member(cluster.cluster_id, session_id, task_summary)
+        effects = None
+        evidence = None
+        if allowed_effects is not None:
+            spec = SubagentLaunchSpec(
+                task_summary=task_summary,
+                allowed_effects=allowed_effects,
+            )
+            effects = self._allowed_effects(spec)
+            evidence = list(member.required_evidence)
+        self.cluster_store.resume_member(
+            cluster.cluster_id,
+            session_id,
+            task_summary,
+            allowed_effects=effects,
+            required_evidence=evidence,
+        )
         child.status = "active"
         self.session_store.save(child)
         return child
@@ -259,16 +274,7 @@ class SubagentCoordinator:
                 effects.insert(0, "read")
             return effects
 
-        task = spec.task_summary.casefold()
-        effects = ["read"]
-        intent = self._intent_classifier.classify(spec.task_summary)
-        if intent.file_changes:
-            effects.append("write")
-        if any(term in task for term in ("pytest", "run tests", "run test", "执行测试", "运行测试")):
-            effects.append("test")
-        if any(term in task for term in ("shell", "command", "脚本", "命令")):
-            effects.append("execute")
-        return list(dict.fromkeys(effects))
+        return ["read"]
 
     def _required_evidence(
         self,

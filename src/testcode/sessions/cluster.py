@@ -267,7 +267,15 @@ class SessionClusterStore:
         self._update(cluster_id, mutate, increment_if=lambda: claimed == [True])
         return claimed == [True]
 
-    def resume_member(self, cluster_id: str, session_id: str, task_summary: str) -> SessionCluster:
+    def resume_member(
+        self,
+        cluster_id: str,
+        session_id: str,
+        task_summary: str,
+        *,
+        allowed_effects: list[str] | None = None,
+        required_evidence: list[str] | None = None,
+    ) -> SessionCluster:
         """Prepare a terminal subagent member for another attempt in the same session."""
         task_summary = _bounded_text(task_summary, "task summary", 2000, required=True)
 
@@ -279,6 +287,10 @@ class SessionClusterStore:
                 raise ValueError(f"subagent in state {member.state!r} cannot be resumed")
             member.state = "ready"
             member.task_summary = task_summary
+            if allowed_effects is not None:
+                member.allowed_effects = list(allowed_effects)
+            if required_evidence is not None:
+                member.required_evidence = list(required_evidence)
             member.attempt += 1
             member.updated_at = _timestamp()
 

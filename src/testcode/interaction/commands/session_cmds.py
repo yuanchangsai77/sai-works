@@ -22,7 +22,8 @@ def handle_reset(cli: CLI, args: list[str], session: StoredSession | None = None
 
     if session is not None and cli.session_store is not None:
         old_id = session.session_id
-        new_session = cli.session_store.create(cwd=session.cwd, messages=[])
+        origin_root = getattr(getattr(session, "workspace_state", None), "origin_root", "") or session.cwd
+        new_session = cli.session_store.create(cwd=origin_root, messages=[])
         new_session.active_capability_ids = list(getattr(session, "active_capability_ids", []))
         new_session.trace = list(getattr(session, "trace", []))
         new_session.run_ids = list(getattr(session, "run_ids", []))
@@ -94,7 +95,8 @@ def handle_compact(cli: CLI, args: list[str], session: StoredSession | None = No
 
     if cli.session_store is not None and session is not None:
         old_id = session.session_id
-        new_session = cli.session_store.create(cwd=session.cwd, messages=list(conversation))
+        origin_root = getattr(getattr(session, "workspace_state", None), "origin_root", "") or session.cwd
+        new_session = cli.session_store.create(cwd=origin_root, messages=list(conversation))
         new_session.active_capability_ids = list(getattr(session, "active_capability_ids", []))
         new_session.trace = list(getattr(session, "trace", []))
         new_session.run_ids = list(getattr(session, "run_ids", []))

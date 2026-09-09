@@ -114,6 +114,11 @@ def _resume_tool() -> SimpleTool:
                 parent,
                 str(action.arguments["session_id"]),
                 str(action.arguments["task"]),
+                allowed_effects=(
+                    list(action.arguments["allowed_effects"])
+                    if isinstance(action.arguments.get("allowed_effects"), list)
+                    else None
+                ),
             )
             cluster = coordinator.snapshot(parent)
             member = next(item for item in cluster.members if item.session_id == child.session_id)
@@ -143,12 +148,17 @@ def _resume_tool() -> SimpleTool:
         arguments={
             "session_id": "Existing direct child session id.",
             "task": "Follow-up task including the new feedback or failure evidence.",
+            "allowed_effects": "Optional replacement effects after reviewing a structured capability blocker.",
         },
         input_schema={
             "type": "object",
             "properties": {
                 "session_id": {"type": "string"},
                 "task": {"type": "string"},
+                "allowed_effects": {
+                    "type": "array",
+                    "items": {"type": "string", "enum": ["read", "write", "test", "execute", "network", "destructive"]},
+                },
             },
             "required": ["session_id", "task"],
             "additionalProperties": False,

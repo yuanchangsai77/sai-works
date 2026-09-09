@@ -7,7 +7,7 @@ except ImportError:
 
 from pathlib import Path
 
-from ..types import ExecutionSummary, SessionRecord, StoredSession, UserRequest
+from ..types import ExecutionSummary, SessionRecord, StoredSession, UserRequest, WorkspaceSessionState
 from .presenter import ConsolePresenter
 
 
@@ -123,14 +123,14 @@ class CLI:
             if session is None:
                 session = self.session_store.create(cwd=cwd, messages=conversation)
             else:
-                session.cwd = cwd
+                self._ensure_workspace_state(session, cwd)
                 session.status = "active"
                 session.messages = list(conversation)
                 self.session_store.save(session)
             self.prepare_session_runtime(session)
             self.presenter.show_session_state(session, resumed=resumed, engine=self.engine)
             if resumed and hasattr(self.presenter, "show_session_history"):
-                self.presenter.show_session_history(session)
+                self.presenter.show_session_history(session.messages)
         self.active_session = session
 
 
@@ -179,7 +179,7 @@ class CLI:
 
             request = UserRequest(
                 prompt=prompt,
-                cwd=cwd,
+                cwd=self._workspace_root(session, cwd),
                 metadata={
                     "conversation": list(conversation),
                     "session_id": session.session_id if session is not None else None,
@@ -187,6 +187,7 @@ class CLI:
                     "session_trace": list(getattr(session, "trace", [])[-6:]) if session is not None else [],
                     "resume_state": getattr(session, "resume_state", None),
                     "context_paths": list(context_paths or []),
+                    "workspace_state": getattr(session, "workspace_state", None),
                 },
             )
             if session is not None and self.logger is not None and self.session_store is not None:
@@ -209,6 +210,7 @@ class CLI:
                 conversation.append({"role": "assistant", "content": summary.final_message})
                 if session is not None:
                     session.messages = list(conversation)
+                    self._apply_workspace_summary(session, summary)
                     session.status = "active"
                     session.active_capability_ids = list(
                         getattr(summary, "active_capability_ids", [])
@@ -292,6 +294,7 @@ class CLI:
         session.active_capability_ids = list(
             getattr(summary, "active_capability_ids", [])
         )
+        self._apply_workspace_summary(session, summary)
         run_summary = getattr(self.logger, "last_run_summary", None)
         if run_summary is not None and all(item.run_id != run_summary.run_id for item in session.trace):
             session.trace.append(run_summary)
@@ -315,6 +318,32 @@ class CLI:
                 reset_state = getattr(tools, "reset_state", None)
                 if callable(reset_state):
                     reset_state()
+
+    @staticmethod
+    def _apply_workspace_summary(session, summary) -> None:
+        state = getattr(summary, "workspace_state", None)
+        if isinstance(state, WorkspaceSessionState) and state.active_root:
+            session.workspace_state = state
+            session.cwd = state.active_root
+
+    @staticmethod
+    def _workspace_root(session: StoredSession | None, fallback: str) -> str:
+        state = getattr(session, "workspace_state", None)
+        if isinstance(state, WorkspaceSessionState) and state.active_root:
+            return state.active_root
+        return fallback
+
+    @staticmethod
+    def _ensure_workspace_state(session: StoredSession, fallback: str) -> None:
+        state = getattr(session, "workspace_state", None)
+        if not isinstance(state, WorkspaceSessionState):
+            session.workspace_state = WorkspaceSessionState(
+                origin_root=session.cwd or fallback,
+                active_root=session.cwd or fallback,
+            )
+            return
+        state.origin_root = state.origin_root or session.cwd or fallback
+        state.active_root = state.active_root or session.cwd or fallback
 
     @staticmethod
     def _cluster_state_for_outcome(outcome: str) -> str:
@@ -555,7 +584,7 @@ class CLI:
             if self.presenter:
                 self.presenter.show_session_state(selected_session, resumed=True, engine=self.engine)
                 if hasattr(self.presenter, "show_session_history"):
-                    self.presenter.show_session_history(selected_session)
+                    self.presenter.show_session_history(selected_session.messages)
         return selected_session
 
 
@@ -599,6 +628,8 @@ class CLI:
             )
             if hasattr(self.engine, "_finish"):
                 self.engine._finish(interrupted_summary)
+            if self.active_session is not None:
+                self._apply_workspace_summary(self.active_session, interrupted_summary)
             if self.logger is not None:
                 self.logger.record("run.interrupted", {"tool_count": tools_count})
                 self.logger.finalize(request, interrupted_summary)

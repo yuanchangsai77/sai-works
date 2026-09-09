@@ -9,7 +9,16 @@ from uuid import uuid4
 
 from ..intent import RequestIntentClassifier
 from ..model.types import ModelRetryableError
-from ..types import EvidenceRecord, ExecutionSummary, RuntimeBlocker, TaskCheckpoint, ToolAction, ToolResult, UserRequest
+from ..types import (
+    EvidenceRecord,
+    ExecutionSummary,
+    RuntimeBlocker,
+    TaskCheckpoint,
+    ToolAction,
+    ToolResult,
+    UserRequest,
+    WorkspaceSessionState,
+)
 from .ext import ContextLoader
 from .permissions import PermissionContext
 from .progress import (
@@ -32,7 +41,9 @@ class ExecutionEngine:
         "capability_activate",
         "capability_release",
         "capability_status",
+        "subagent_request_effects",
     }
+    subagent_only_tools = {"subagent_request_effects"}
 
     max_model_retries = 7
     model_retry_delays = (0.5, 1.0, 1.5, 2.0, 3.0, 5.0, 8.0)
@@ -45,6 +56,8 @@ class ExecutionEngine:
         "duplicate_tool_call",
         "delegated_effect_not_allowed",
         "delegated_resource_not_allowed",
+        "delegated_capability_upgrade_requested",
+        "delegated_contract_invalid",
         "invalid_argument_type",
         "invalid_argument_value",
         "invalid_patch",
@@ -159,16 +172,25 @@ class ExecutionEngine:
         available_tools = self._available_tool_definitions(request)
         provider_statuses = getattr(self.tools, "provider_statuses", lambda: [])()
         checkpoint = self._initial_checkpoint(request)
+        workspace_state = self._workspace_state(request)
+        session_request = UserRequest(
+            prompt=request.prompt,
+            cwd=workspace_state.active_root,
+            metadata=request.metadata,
+        )
         session = SessionContext(
-            request=request,
+            request=session_request,
+            workspace_state=workspace_state,
             available_tools=available_tools,
             external_tool_statuses=provider_statuses,
             checkpoint=checkpoint,
         )
         self.current_session = session
+        for root in self._workspace_roots(workspace_state):
+            permissions.grant_workspace_path(root, scope="session")
 
         for loader in self.context_loaders:
-            loader.load_context(request, session)
+            loader.load_context(session.request, session)
         if self.capability_warehouse is not None:
             self.capability_warehouse.apply_to_session(session)
 
@@ -332,6 +354,10 @@ class ExecutionEngine:
             turn_results: list[ToolResult] = []
             for action in reply.actions:
                 self._raise_if_cancelled()
+                action_cwd = self._task_workspace_root(request, session)
+                if action.name == "workspace_open":
+                    completed_actions.clear()
+                    duplicate_counts.clear()
                 if action.name not in visible_tool_names:
                     definition = self.tools.definition_for(action.name)
                     result = self._delegated_effect_problem(definition, request)
@@ -365,8 +391,8 @@ class ExecutionEngine:
                 if callable(preflight):
                     result = preflight(
                         action,
-                        cwd=request.cwd,
-                        allowed_roots=permissions.workspace_roots(scopes={"run"}),
+                        cwd=action_cwd,
+                        allowed_roots=permissions.workspace_roots(scopes={"run", "session"}),
                     )
                     if result is not None:
                         self._attach_action_metadata(result, action)
@@ -405,10 +431,12 @@ class ExecutionEngine:
                             approved_risk_groups.add(approval_key)
                         result = self._execute_action(
                             action,
-                            request.cwd,
+                            action_cwd,
                             permissions,
+                            session,
                         )
                         session.add_tool_result(result)
+                        self._refresh_task_workspace_context(session)
                         turn_results.append(result)
                         if result.success or result.error_code in self.non_retryable_error_codes:
                             if result.success and self._may_mutate_workspace(decision.risk_level):
@@ -452,10 +480,12 @@ class ExecutionEngine:
 
                 result = self._execute_action(
                     action,
-                    request.cwd,
+                    action_cwd,
                     permissions,
+                    session,
                 )
                 session.add_tool_result(result)
+                self._refresh_task_workspace_context(session)
                 turn_results.append(result)
                 if result.success or result.error_code in self.non_retryable_error_codes:
                     if result.success and self._may_mutate_workspace(decision.risk_level):
@@ -584,6 +614,7 @@ class ExecutionEngine:
             summary.outcome = self._aggregate_outcome(summary.tool_results)
         if self.current_session is not None:
             summary.checkpoint = self.current_session.checkpoint
+            summary.workspace_state = self.current_session.workspace_state
         unresolved = self._unresolved_results(summary.tool_results)
         if summary.outcome == "completed":
             summary.blockers = []
@@ -915,6 +946,8 @@ class ExecutionEngine:
             "blocked_by_security_policy",
             "delegated_effect_not_allowed",
             "delegated_resource_not_allowed",
+            "delegated_capability_upgrade_requested",
+            "delegated_contract_invalid",
             "path_outside_workspace",
             "subagent_blocked",
             "subagent_partial",
@@ -973,25 +1006,41 @@ class ExecutionEngine:
         definitions = self.tools.definitions()
         contract = request.metadata.get("delegated_task")
         if not isinstance(contract, dict):
-            return definitions
+            return [item for item in definitions if item.name not in self.subagent_only_tools]
         effects = contract.get("allowed_effects")
         if not isinstance(effects, list):
-            return definitions
+            return [
+                definition
+                for definition in definitions
+                if definition.risk_level == "read" or definition.name in self.subagent_only_tools
+            ]
         allowed = {value for value in effects if isinstance(value, str)}
-        return [definition for definition in definitions if definition.risk_level in allowed]
+        return [
+            definition
+            for definition in definitions
+            if definition.risk_level in allowed or definition.name in self.subagent_only_tools
+        ]
 
     def _delegated_effect_problem(self, definition, request: UserRequest) -> ToolResult | None:
         contract = request.metadata.get("delegated_task")
         if definition is None or not isinstance(contract, dict):
             return None
         effects = contract.get("allowed_effects")
-        if not isinstance(effects, list) or definition.risk_level in effects:
+        if not isinstance(effects, list):
+            return ToolResult(
+                definition.name,
+                False,
+                "delegated task contract is missing a valid allowed_effects list",
+                "delegated_contract_invalid",
+            )
+        if definition.risk_level in effects:
             return None
         return ToolResult(
             definition.name,
             False,
             f"delegated task does not allow {definition.risk_level} effects",
             "delegated_effect_not_allowed",
+            metadata={"requested_effect": definition.risk_level},
         )
 
     def _session_key(self, request: UserRequest) -> str | None:
@@ -1063,6 +1112,7 @@ class ExecutionEngine:
         action,
         cwd: str,
         permissions: PermissionContext,
+        session: SessionContext,
     ) -> ToolResult:
         progress_handle = None
         result = None
@@ -1072,7 +1122,7 @@ class ExecutionEngine:
             result = self.tools.execute(
                 action,
                 cwd=cwd,
-                allowed_roots=permissions.workspace_roots(scopes={"run"}),
+                allowed_roots=permissions.workspace_roots(scopes={"run", "session"}),
             )
             self._attach_action_metadata(result, action)
             if result.error_code == "path_outside_workspace":
@@ -1082,7 +1132,7 @@ class ExecutionEngine:
 
                 grant_path = self._workspace_grant_path(result)
                 if grant_path is not None:
-                    scope = "run"
+                    scope = "session"
                     approval = ToolAction(
                         name="workspace_access",
                         arguments={
@@ -1118,17 +1168,25 @@ class ExecutionEngine:
                         return ret_res
 
                     grant = permissions.grant_workspace_path(grant_path, scope=scope)
+                    self._record_workspace_grant(session, grant.path)
                     self.logger.record(
                         "workspace.grant",
                         {"path": grant.path, "scope": grant.scope, "requested_by": action.name},
                     )
                     if self.progress_reporter:
                         progress_handle = self.progress_reporter.tool_started(action.name)
-                    retried = self.tools.execute(action, cwd=cwd, allowed_roots=permissions.workspace_roots(scopes={"run"}))
+                    retried = self.tools.execute(
+                        action,
+                        cwd=cwd,
+                        allowed_roots=permissions.workspace_roots(scopes={"run", "session"}),
+                    )
                     self._attach_action_metadata(retried, action)
                     retried.metadata["workspace_grant"] = grant.path
                     retried.metadata["workspace_grant_scope"] = grant.scope
+                    retried.metadata["workspace_grant_source"] = "orchestration"
                     result = retried
+            if result is not None and result.success and action.name == "workspace_open":
+                self._activate_workspace(session, result)
             if self.capability_warehouse is not None and result is not None:
                 self.capability_warehouse.mark_used(
                     action.name,
@@ -1148,6 +1206,69 @@ class ExecutionEngine:
         if not isinstance(raw_path, str) or not raw_path:
             return None
         return str(Path(raw_path).expanduser().resolve(strict=False))
+
+    @staticmethod
+    def _activate_workspace(session: SessionContext, result: ToolResult) -> None:
+        raw_path = result.metadata.get("path")
+        if not isinstance(raw_path, str) or not raw_path:
+            return
+        candidate = Path(raw_path).expanduser().resolve(strict=False)
+        if candidate.is_dir():
+            session.workspace_state.active_root = str(candidate)
+            session.checkpoint.workspace_root = str(candidate)
+
+    @staticmethod
+    def _task_workspace_root(request: UserRequest, session: SessionContext) -> str:
+        return session.workspace_state.active_root or request.cwd
+
+    @staticmethod
+    def _workspace_state(request: UserRequest) -> WorkspaceSessionState:
+        raw = request.metadata.get("workspace_state")
+        if isinstance(raw, WorkspaceSessionState):
+            origin = raw.origin_root or request.cwd
+            active = raw.active_root or origin
+            roots = raw.approved_roots
+        else:
+            origin = request.cwd
+            active = request.cwd
+            roots = []
+        origin_path = Path(origin).expanduser().resolve(strict=False)
+        active_path = Path(active).expanduser().resolve(strict=False)
+        approved_roots: list[str] = []
+        for root in roots if isinstance(roots, list) else []:
+            if isinstance(root, str) and root:
+                candidate = str(Path(root).expanduser().resolve(strict=False))
+                if candidate not in approved_roots:
+                    approved_roots.append(candidate)
+        allowed_roots = [origin_path, *(Path(root) for root in approved_roots)]
+        if not active_path.is_dir() or not any(
+            active_path.is_relative_to(root) for root in allowed_roots
+        ):
+            active_path = origin_path
+        return WorkspaceSessionState(
+            origin_root=str(origin_path),
+            active_root=str(active_path),
+            approved_roots=approved_roots,
+        )
+
+    @staticmethod
+    def _workspace_roots(state: WorkspaceSessionState) -> list[str]:
+        roots = [state.origin_root, *state.approved_roots]
+        return list(dict.fromkeys(root for root in roots if root))
+
+    @staticmethod
+    def _record_workspace_grant(session: SessionContext, path: str) -> None:
+        candidate = str(Path(path).expanduser().resolve(strict=False))
+        if candidate not in session.workspace_state.approved_roots:
+            session.workspace_state.approved_roots.append(candidate)
+
+    def _refresh_task_workspace_context(self, session: SessionContext) -> None:
+        root = session.workspace_state.active_root
+        if not root or session.request.cwd == root:
+            return
+        session.request.cwd = root
+        for loader in self.context_loaders:
+            loader.load_context(session.request, session)
 
     def _action_key(self, action) -> str:
         return json.dumps(

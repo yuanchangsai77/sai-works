@@ -17,6 +17,7 @@ from ..types import (
     SessionTurnTrace,
     StoredSession,
     TaskCheckpoint,
+    WorkspaceSessionState,
 )
 
 try:
@@ -58,6 +59,7 @@ class SessionStore:
             run_ids=[],
             trace=[],
             resume_state=SessionResumeState(),
+            workspace_state=WorkspaceSessionState(origin_root=cwd, active_root=cwd),
             parent_session_id=parent_session_id,
             cluster_id=cluster_id,
             session_role=session_role,
@@ -100,6 +102,7 @@ class SessionStore:
             "active_capability_ids": list(getattr(session, "active_capability_ids", [])),
             "trace": [self._trace_to_payload(item) for item in getattr(session, "trace", [])],
             "resume_state": self._resume_state_to_payload(session.resume_state),
+            "workspace_state": self._workspace_state_to_payload(session.workspace_state, session.cwd),
             "parent_session_id": session.parent_session_id,
             "cluster_id": session.cluster_id,
             "session_role": session.session_role,
@@ -136,6 +139,7 @@ class SessionStore:
             active_capability_ids=self._string_list(payload.get("active_capability_ids", [])),
             trace=self._normalize_trace(payload.get("trace", [])),
             resume_state=self._normalize_resume_state(payload.get("resume_state", {})),
+            workspace_state=self._normalize_workspace_state(payload.get("workspace_state", {}), str(payload["cwd"])),
             parent_session_id=str(payload.get("parent_session_id", "")),
             cluster_id=str(payload.get("cluster_id", "")),
             session_role=str(payload.get("session_role", "primary")),
@@ -184,6 +188,9 @@ class SessionStore:
             *[item for item in session.trace if item.run_id not in persisted_run_ids],
         ]
         session.resume_state = self._normalize_resume_state(existing.get("resume_state", {}))
+        session.workspace_state = self._normalize_workspace_state(
+            existing.get("workspace_state", {}), session.cwd
+        )
 
     def list_sessions(self) -> list[SessionRecord]:
         if not self.base_dir.exists():
@@ -315,6 +322,17 @@ class SessionStore:
             checkpoint=self._normalize_checkpoint(payload.get("checkpoint", {})),
         )
 
+    def _normalize_workspace_state(self, payload: object, cwd: str) -> WorkspaceSessionState:
+        if not isinstance(payload, dict):
+            return WorkspaceSessionState(origin_root=cwd, active_root=cwd)
+        origin_root = str(payload.get("origin_root", "")) or cwd
+        active_root = str(payload.get("active_root", "")) or cwd
+        return WorkspaceSessionState(
+            origin_root=origin_root,
+            active_root=active_root,
+            approved_roots=self._string_list(payload.get("approved_roots", [])),
+        )
+
     def _normalize_blockers(self, value: object) -> list[RuntimeBlocker]:
         if not isinstance(value, list):
             return []
@@ -429,6 +447,17 @@ class SessionStore:
             "recovery_hint": state.recovery_hint,
             "blockers": [self._blocker_to_payload(item) for item in state.blockers],
             "checkpoint": self._checkpoint_to_payload(state.checkpoint),
+        }
+
+    @staticmethod
+    def _workspace_state_to_payload(
+        state: WorkspaceSessionState,
+        cwd: str,
+    ) -> dict[str, object]:
+        return {
+            "origin_root": state.origin_root or cwd,
+            "active_root": state.active_root or cwd,
+            "approved_roots": list(dict.fromkeys(state.approved_roots)),
         }
 
     def _blocker_to_payload(self, blocker: RuntimeBlocker) -> dict[str, str]:

@@ -128,6 +128,7 @@ class ExecutionSummary:
     outcome: str = "completed"
     blockers: list[RuntimeBlocker] = field(default_factory=list)
     checkpoint: TaskCheckpoint = field(default_factory=TaskCheckpoint)
+    workspace_state: "WorkspaceSessionState" = field(default_factory=lambda: WorkspaceSessionState())
 
 
 
@@ -182,6 +183,15 @@ class SessionResumeState:
 
 
 @dataclass(slots=True)
+class WorkspaceSessionState:
+    """Persistent workspace authority owned by one user session."""
+
+    origin_root: str = ""
+    active_root: str = ""
+    approved_roots: list[str] = field(default_factory=list)
+
+
+@dataclass(slots=True)
 class StoredSession:
     session_id: str
     cwd: str
@@ -193,6 +203,7 @@ class StoredSession:
     active_capability_ids: list[str] = field(default_factory=list)
     trace: list[SessionRunTrace] = field(default_factory=list)
     resume_state: SessionResumeState = field(default_factory=SessionResumeState)
+    workspace_state: WorkspaceSessionState = field(default_factory=WorkspaceSessionState)
     parent_session_id: str = ""
     cluster_id: str = ""
     session_role: str = "primary"
