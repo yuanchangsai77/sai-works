@@ -1,6 +1,6 @@
-# AgentForge
+# SaiWorks
 
-`AgentForge` is an LLM-driven CLI workbench. The CLI itself does not own decision-making intelligence. It provides a controlled runtime that collects context, delegates reasoning to a large model, executes approved tools, and returns observable results to the user.
+`SaiWorks` is an LLM-driven CLI workbench. The CLI itself does not own decision-making intelligence. It provides a controlled runtime that collects context, delegates reasoning to a large model, executes approved tools, and returns observable results to the user.
 
 ## Architecture
 
@@ -34,7 +34,7 @@ Detailed design is in [docs/architecture.md](docs/architecture.md).
 | 字段参考 | [工具契约](docs/reference/tool-contract.md) | Tool 定义、结果、metadata 和摘要的字段流向 | 工具实现教程 |
 | 扩展设计 | [运行时扩展](docs/extensions/runtime-interfaces.md) | ContextLoader、ToolProvider、ResourceProvider 通用边界 | MCP、Skill 的内部设计 |
 | 扩展设计 | [能力仓库](docs/extensions/capability-warehouse.md) | 工具箱、渐进披露、激活和回收策略 | transport 或 Skill 文件格式 |
-| 目标架构 | [未来平台蓝图](docs/future/README.md) | `AgentForge`、模型网关与未来 Device Fabric 的跨项目边界、协议需求和演进方案 | 当前已实现行为和近期优先级 |
+| 目标架构 | [未来平台蓝图](docs/future/README.md) | `SaiWorks`、模型网关与未来 Device Fabric 的跨项目边界、协议需求和演进方案 | 当前已实现行为和近期优先级 |
 | 专项设计 | [MCP 集成](docs/extensions/mcp-integration.md) | MCP transport、discovery、协议、安全和生命周期 | 全局 roadmap |
 | 专项设计 | [Skill 系统](docs/extensions/skill-system.md) | Skill 格式、来源、箱内资产及激活语义 | 通用仓库策略 |
 | 当前交互 | [TUI 当前行为](docs/interaction/tui-current.md) | 终端交互、输入编辑、重绘和兼容性边界 | runtime orchestration |
@@ -48,7 +48,7 @@ Detailed design is in [docs/architecture.md](docs/architecture.md).
 ## Project Layout
 
 ```text
-src/testcode/
+src/saiworks/
   config.py         Runtime configuration and .env loading
   interaction/     CLI input/output
   orchestration/   session state and agent loop
@@ -63,7 +63,7 @@ src/testcode/
 
 Requirements: Python 3.11 or newer.
 
-Create a project-local virtual environment and install `AgentForge` in editable
+Create a project-local virtual environment and install `SaiWorks` in editable
 mode:
 
 ```bash
@@ -71,14 +71,12 @@ python3 -m venv .venv
 .venv/bin/python -m pip install -e .
 ```
 
-The installed command is `agent-forge`. The legacy `testcode` command, Python
-module, `TESTCODE_*` environment variables, and `.testcode/` data directory are
-retained for backward compatibility.
+The installed command is `sai-works`; the Python module is `saiworks`.
 
 Run a single request:
 
 ```bash
-.venv/bin/agent-forge --once "summarize this repository"
+.venv/bin/sai-works --once "summarize this repository"
 ```
 
 Single-request mode also creates and closes a persisted session, so delegated
@@ -87,7 +85,7 @@ subagent work and later `--resume` use the same session contract as interactive 
 When developing without an editable install, use the source-tree form:
 
 ```bash
-PYTHONPATH=src python3 -m testcode --once "summarize this repository"
+PYTHONPATH=src python3 -m saiworks --once "summarize this repository"
 ```
 
 The current implementation supports a structured local tool loop for file
@@ -100,116 +98,116 @@ the same path with `/skill <name>`; these commands do not maintain a separate ca
 Long conversation mode:
 
 ```bash
-PYTHONPATH=src python3 -m testcode
+PYTHONPATH=src python3 -m saiworks
 ```
 
 List saved conversations:
 
 ```bash
-PYTHONPATH=src python3 -m testcode --list
+PYTHONPATH=src python3 -m saiworks --list
 ```
 
 Choose a saved conversation interactively:
 
 ```bash
-PYTHONPATH=src python3 -m testcode --resume
+PYTHONPATH=src python3 -m saiworks --resume
 ```
 
 Resume the most recent conversation:
 
 ```bash
-PYTHONPATH=src python3 -m testcode --last
+PYTHONPATH=src python3 -m saiworks --last
 ```
 
 Resume a specific conversation by id:
 
 ```bash
-PYTHONPATH=src python3 -m testcode --resume 20260331041240862413-588cbf9b
+PYTHONPATH=src python3 -m saiworks --resume 20260331041240862413-588cbf9b
 ```
 
 Single turn only:
 
 ```bash
-PYTHONPATH=src python3 -m testcode --once "summarize this repository"
+PYTHONPATH=src python3 -m saiworks --once "summarize this repository"
 ```
 
 Add explicit context files, directories, or globs:
 
 ```bash
-PYTHONPATH=src python3 -m testcode --context README.md --context "docs/*.md" "summarize these docs"
+PYTHONPATH=src python3 -m saiworks --context README.md --context "docs/*.md" "summarize these docs"
 ```
 
-At the start of each run, `AgentForge` also injects bounded context from
+At the start of each run, `SaiWorks` also injects bounded context from
 project `AGENTS.md` rules, common project markers, git status, and a compact
 workspace tree.
 
 Choose a safety mode:
 
 ```bash
-PYTHONPATH=src python3 -m testcode --mode readonly "summarize this repository"
-PYTHONPATH=src python3 -m testcode --mode confirm "edit a file after approval"
-PYTHONPATH=src python3 -m testcode --mode auto "apply low-risk file edits automatically"
+PYTHONPATH=src python3 -m saiworks --mode readonly "summarize this repository"
+PYTHONPATH=src python3 -m saiworks --mode confirm "edit a file after approval"
+PYTHONPATH=src python3 -m saiworks --mode auto "apply low-risk file edits automatically"
 ```
 
 ## Connect To An OpenAI-Compatible Endpoint
 
 Start your OpenAI-compatible endpoint and configure the `.env` file in the
-`AgentForge` source tree with its base URL:
+`SaiWorks` source tree with its base URL:
 
 ```env
-TESTCODE_MODEL_BASE_URL=http://127.0.0.1:3000
-TESTCODE_MODEL_NAME=gpt-5.4
-TESTCODE_MODEL_TIMEOUT=60
-TESTCODE_MODEL_STREAM_MAX_SECONDS=900
-TESTCODE_MODEL_STREAM=false
-TESTCODE_MODE=confirm
+SAIWORKS_MODEL_BASE_URL=http://127.0.0.1:3000
+SAIWORKS_MODEL_NAME=gpt-5.4
+SAIWORKS_MODEL_TIMEOUT=60
+SAIWORKS_MODEL_STREAM_MAX_SECONDS=900
+SAIWORKS_MODEL_STREAM=false
+SAIWORKS_MODE=confirm
 ```
 
 Behavior:
 
-- `AgentForge` automatically loads `.env` beside the source checkout; an arbitrary
+- `SaiWorks` automatically loads `.env` beside the source checkout; an arbitrary
   target workspace's `.env` is not loaded automatically
-- If `TESTCODE_MODEL_BASE_URL` is still not set, `AgentForge` keeps using `StubModelClient`
-- If `TESTCODE_MODEL_BASE_URL` is set, `AgentForge` sends requests to `POST /v1/chat/completions`
-- `TESTCODE_MODEL_TIMEOUT` defaults to 60 seconds. It is the total timeout for JSON responses and the connection,
+- If `SAIWORKS_MODEL_BASE_URL` is still not set, `SaiWorks` keeps using `StubModelClient`
+- If `SAIWORKS_MODEL_BASE_URL` is set, `SaiWorks` sends requests to `POST /v1/chat/completions`
+- `SAIWORKS_MODEL_TIMEOUT` defaults to 60 seconds. It is the total timeout for JSON responses and the connection,
   first-byte, and inactivity timeout for SSE; active SSE traffic refreshes the inactivity window.
-- `TESTCODE_MODEL_STREAM_MAX_SECONDS` is the independent SSE wall-clock safety limit and defaults to 900 seconds.
-- `TESTCODE_MODEL_STREAM=true` enables OpenAI-compatible SSE transport. Deltas may be observed as they arrive,
+- `SAIWORKS_MODEL_STREAM_MAX_SECONDS` is the independent SSE wall-clock safety limit and defaults to 900 seconds.
+- `SAIWORKS_MODEL_STREAM=true` enables OpenAI-compatible SSE transport. Deltas may be observed as they arrive,
   and interactive terminals render only projected natural-language fields as they arrive. Tool calls remain buffered;
   the orchestration loop receives one fully assembled and validated reply.
-- `python -m testcode --stream` enables the same behavior for one invocation; `--no-stream` overrides an enabled
+- `python -m saiworks --stream` enables the same behavior for one invocation; `--no-stream` overrides an enabled
   environment setting.
-- `TESTCODE_MODE` controls tool safety and defaults to `confirm`
+- `SAIWORKS_MODE` controls tool safety and defaults to `confirm`
 - The configured endpoint remains responsible for its upstream credentials and provider-specific authentication
 - The real-model path now supports tool-call loops: the model can request built-in tools, receive tool results, and continue until it produces a final answer
-- Each run automatically writes observability logs under `.testcode/runs/<timestamp>/`, including `events.jsonl` and a layered `details.log`
+- Each run automatically writes observability logs under `.saiworks/runs/<timestamp>/`, including `events.jsonl` and a layered `details.log`
 
 ## Configuration
 
-模型连接信息继续放在 `.env`；运行策略和 MCP 服务放在 `~/.testcode/config.toml` 或项目的
-`.testcode/config.toml`。项目配置覆盖全局同名项。完整示例、参数中文说明和内部硬上限见
+模型连接信息继续放在 `.env`；运行策略和 MCP 服务放在 `~/.saiworks/config.toml` 或项目的
+`.saiworks/config.toml`。项目配置覆盖全局同名项。完整示例、参数中文说明和内部硬上限见
 [配置参考](docs/reference/configuration.md)。
 
 Run:
 
 ```bash
-.venv/bin/agent-forge "summarize this repository"
+.venv/bin/sai-works "summarize this repository"
 ```
 
-If you pass an initial prompt without `--once`, `AgentForge` answers that prompt and then stays in interactive conversation mode. Type `exit` or `quit` to leave.
+If you pass an initial prompt without `--once`, `SaiWorks` answers that prompt and then stays in interactive conversation mode. Type `exit` or `quit` to leave.
 
 Interactive conversations are saved under the package/source checkout's
-`.testcode/sessions/` directory; this is not the active target workspace when
+`.saiworks/sessions/` directory; this is not the active target workspace when
 the two differ. Use `--list` to inspect saved session ids,
 `--resume <session_id>` to continue a specific conversation, or `--last` to
 reopen the most recently updated one.
 
-If you prefer interactive selection, run `PYTHONPATH=src python3 -m testcode --resume` without an id and pick a numbered session from the list.
+If you prefer interactive selection, run `PYTHONPATH=src python3 -m saiworks --resume` without an id and pick a numbered session from the list.
 
-For bash completion of `AgentForge` flags, source [`contrib/agent-forge-completion.bash`](contrib/agent-forge-completion.bash) from the repository root:
+For bash completion of `SaiWorks` flags, source [`contrib/sai-works-completion.bash`](contrib/sai-works-completion.bash) from the repository root:
 
 ```bash
-source contrib/agent-forge-completion.bash
+source contrib/sai-works-completion.bash
 ```
 
 ## Core Tools
@@ -238,21 +236,21 @@ capabilities rather than defining whether a core tool exists.
 
 每个交互会话最多维护一个串行的 Bash 会话，以保留工作目录和环境变量。
 在 POSIX/Linux 环境中，该 Bash 在独立进程组中运行：正常退出、输入阶段的 Ctrl+C、
-执行阶段的 Ctrl+C 以及命令超时时，AgentForge 会终止整个进程组，而不是只终止 Bash
+执行阶段的 Ctrl+C 以及命令超时时，SaiWorks 会终止整个进程组，而不是只终止 Bash
 主进程。因此由该会话启动的普通后台子进程也会一并停止。超时后会立即重置为干净的
 Bash，后续命令继续在该新 Bash 中执行。
 完整的终止时机、并发边界和安全边界见
 [Shell 会话生命周期](docs/core/shell-session-lifecycle.md)。
 
-这是一种进程生命周期管理机制，不是操作系统级沙盒：命令仍以启动 AgentForge 的用户
+这是一种进程生命周期管理机制，不是操作系统级沙盒：命令仍以启动 SaiWorks 的用户
 权限执行。对不可信代码或需要限制文件、网络和资源访问的任务，应在容器或系统级
-沙盒中运行 AgentForge。
+沙盒中运行 SaiWorks。
 
-Concrete tool implementations live under `src/testcode/tools/builtins/`.
+Concrete tool implementations live under `src/saiworks/tools/builtins/`.
 Each built-in tool is described in its own module and exported through a
 `tool()` factory. Shared helpers for schema creation, workspace path resolution,
-process execution, and output clipping live in `src/testcode/tools/shared.py`.
-`src/testcode/tools/builtin_provider.py` supplies built-ins to application composition and owns the
+process execution, and output clipping live in `src/saiworks/tools/shared.py`.
+`src/saiworks/tools/builtin_provider.py` supplies built-ins to application composition and owns the
 standalone registry factory used by tests; there is no parallel legacy assembly path.
 
 Risky tools such as `shell_exec` and `patch` require interactive approval in

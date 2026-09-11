@@ -1,4 +1,4 @@
-_agent_forge_completions()
+_saiworks_completions()
 {
     local cur prev
     cur="${COMP_WORDS[COMP_CWORD]}"
@@ -8,14 +8,14 @@ _agent_forge_completions()
     local opts="--once --list --resume --last --help"
 
     if [[ "${target}" == "python3" ]]; then
-        if [[ "${#COMP_WORDS[@]}" -lt 3 || "${COMP_WORDS[1]}" != "-m" || "${COMP_WORDS[2]}" != "testcode" ]]; then
+        if [[ "${#COMP_WORDS[@]}" -lt 3 || "${COMP_WORDS[1]}" != "-m" || "${COMP_WORDS[2]}" != "saiworks" ]]; then
             return
         fi
     fi
 
     if [[ "${prev}" == "--resume" ]]; then
         local session_dir
-        session_dir="$(pwd)/.testcode/sessions"
+        session_dir="$(pwd)/.saiworks/sessions"
         if [[ -d "${session_dir}" ]]; then
             local sessions
             sessions="$(cd "${session_dir}" 2>/dev/null && printf '%s\n' *.json | sed 's/\.json$//' | grep -v '^\*$')"
@@ -27,6 +27,5 @@ _agent_forge_completions()
     COMPREPLY=( $(compgen -W "${opts}" -- "${cur}") )
 }
 
-complete -F _agent_forge_completions agent-forge
-complete -F _agent_forge_completions testcode
-complete -F _agent_forge_completions python3
+complete -F _saiworks_completions sai-works
+complete -F _saiworks_completions python3

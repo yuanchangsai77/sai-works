@@ -21,7 +21,7 @@ IGNORED_PROJECT_DIRS = {
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
-    ".testcode",
+    ".saiworks",
     ".venv",
     "__pycache__",
     "build",

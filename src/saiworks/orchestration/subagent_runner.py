@@ -118,7 +118,7 @@ class SubagentRunner:
         if not ready_ids:
             return []
         worker_count = min(self.max_workers, len(ready_ids))
-        pool = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="testcode-subagent")
+        pool = ThreadPoolExecutor(max_workers=worker_count, thread_name_prefix="saiworks-subagent")
         futures: list[Future[SubagentRunResult]] = [
             pool.submit(self._run_one, snapshot.cluster_id, session_id)
             for session_id in ready_ids

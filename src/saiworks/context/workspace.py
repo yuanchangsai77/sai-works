@@ -15,7 +15,7 @@ IGNORED_DIRS = {
     ".mypy_cache",
     ".pytest_cache",
     ".ruff_cache",
-    ".testcode",
+    ".saiworks",
     ".venv",
     "__pycache__",
     "dist",

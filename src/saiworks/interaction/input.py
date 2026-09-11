@@ -133,7 +133,7 @@ class PromptBox:
         try:
             readline_start = "\x01"
             readline_end = "\x02"
-            prompt = f" {readline_start}\033[1;36m{readline_end}AgentForge>{readline_start}\033[0m{readline_end} "
+            prompt = f" {readline_start}\033[1;36m{readline_end}SaiWorks>{readline_start}\033[0m{readline_end} "
             user_input = input(prompt).strip()
             self._clear_input_frame()
             self.show_border()
@@ -304,11 +304,11 @@ class PromptBox:
     def _redraw_empty_input(self, engine=None) -> None:
         """Refresh only the lower input chrome after a window resize."""
         # Keep the existing prompt row intact. Only replace the rows below it;
-        # this avoids duplicating ``AgentForge>`` when a narrow terminal reflows.
+        # this avoids duplicating ``SaiWorks>`` when a narrow terminal reflows.
         sys.stdout.write("\r\033[1B\033[J")
         self.show_border()
         self.status_bar.show(engine=engine, is_running=False)
-        sys.stdout.write(f"\r\033[3A\033[{self._display_width(' AgentForge> ')}C")
+        sys.stdout.write(f"\r\033[3A\033[{self._display_width(' SaiWorks> ')}C")
         sys.stdout.flush()
 
     def _render_expanding_input(self, value: str, engine=None, cursor: int | None = None) -> None:
@@ -335,13 +335,13 @@ class PromptBox:
                 previous_cursor_row = len(previous_cursor_lines) - 1
                 previous_cursor_column = self._display_width(previous_cursor_lines[-1])
                 if previous_cursor_row == 0:
-                    previous_cursor_column += self._display_width(" AgentForge> ")
+                    previous_cursor_column += self._display_width(" SaiWorks> ")
 
                 rows_to_top = ceil(previous_columns / columns)
                 for row, line in enumerate(previous_lines[:previous_cursor_row]):
                     width = self._display_width(line)
                     if row == 0:
-                        width += self._display_width(" AgentForge> ")
+                        width += self._display_width(" SaiWorks> ")
                     rows_to_top += max(ceil(width / columns), 1)
                 rows_to_top += previous_cursor_column // columns
 
@@ -355,7 +355,7 @@ class PromptBox:
         cursor_row = len(cursor_lines) - 1
         self.show_border()
 
-        prompt = " \033[1;36mAgentForge>\033[0m "
+        prompt = " \033[1;36mSaiWorks>\033[0m "
         sys.stdout.write(f"{prompt}{lines[0]}")
         for line in lines[1:]:
             sys.stdout.write(f"\n  {line}")
@@ -365,7 +365,7 @@ class PromptBox:
 
         cursor_column = self._display_width(cursor_lines[-1])
         if cursor_row == 0:
-            cursor_column += self._display_width(" AgentForge> ")
+            cursor_column += self._display_width(" SaiWorks> ")
         else:
             cursor_column += 2
         rows_up = len(lines) + 1 - cursor_row
@@ -383,7 +383,7 @@ class PromptBox:
     def _show_submitted_input(self, value: str) -> None:
         """Leave the completed prompt in the transcript after it is submitted."""
         lines = self._wrap_prompt_value(value)
-        prompt = " \033[1;36mAgentForge>\033[0m "
+        prompt = " \033[1;36mSaiWorks>\033[0m "
         self.show_border()
         sys.stdout.write(f"{prompt}{lines[0]}")
         for line in lines[1:]:
@@ -394,7 +394,7 @@ class PromptBox:
 
     def _wrap_prompt_value(self, value: str, columns: int | None = None) -> list[str]:
         columns = max(columns if columns is not None else terminal_columns(), 1)
-        first_width = max(columns - self._display_width(" AgentForge> ") - 1, 1)
+        first_width = max(columns - self._display_width(" SaiWorks> ") - 1, 1)
         subsequent_width = max(columns - 3, 1)
         lines: list[str] = [""]
         remaining = first_width

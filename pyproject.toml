@@ -3,7 +3,7 @@ requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "agent-forge"
+name = "sai-works"
 version = "0.2.0"
 description = "An LLM-driven CLI workbench scaffold."
 readme = "README.md"
@@ -13,8 +13,7 @@ dependencies = [
 ]
 
 [project.scripts]
-agent-forge = "testcode.__main__:main"
-testcode = "testcode.__main__:main"
+sai-works = "saiworks.__main__:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
@@ -23,4 +22,4 @@ package-dir = {"" = "src"}
 where = ["src"]
 
 [tool.setuptools.package-data]
-"testcode.skills" = ["builtins/*/SKILL.md"]
+"saiworks.skills" = ["builtins/*/SKILL.md"]

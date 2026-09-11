@@ -4,9 +4,9 @@ from io import StringIO
 from types import SimpleNamespace
 import pytest
 
-from testcode.interaction.commands import SlashCommand, SlashCommandRegistry, default_slash_command_registry
-from testcode.interaction.cli import CLI
-from testcode.interaction.presenter import ConsolePresenter
+from saiworks.interaction.commands import SlashCommand, SlashCommandRegistry, default_slash_command_registry
+from saiworks.interaction.cli import CLI
+from saiworks.interaction.presenter import ConsolePresenter
 
 
 def test_slash_command_registry_completions():
@@ -78,9 +78,9 @@ def test_custom_command_registration():
 
 
 def test_capability_commands_share_the_runtime_warehouse(tmp_path, monkeypatch):
-    from testcode.app import create_app
+    from saiworks.app import create_app
 
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     output = StringIO()
     app = create_app(workspace_root=tmp_path)
     app.presenter._output = output
@@ -129,9 +129,9 @@ def test_capability_commands_share_the_runtime_warehouse(tmp_path, monkeypatch):
 
 
 def test_skill_command_uses_warehouse_activation(tmp_path, monkeypatch):
-    from testcode.app import create_app
+    from saiworks.app import create_app
 
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     app = create_app(workspace_root=tmp_path)
     session = app.session_store.create(cwd=str(tmp_path))
 
@@ -147,9 +147,9 @@ def test_skill_command_uses_warehouse_activation(tmp_path, monkeypatch):
 
 
 def test_user_activation_command_opens_selected_local_toolbox(tmp_path, monkeypatch):
-    from testcode.app import create_app
+    from saiworks.app import create_app
 
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     app = create_app(workspace_root=tmp_path)
     session = app.session_store.create(cwd=str(tmp_path))
 
@@ -186,9 +186,9 @@ def test_user_activation_command_opens_selected_local_toolbox(tmp_path, monkeypa
 
 
 def test_skill_command_preserves_restored_session_capabilities(tmp_path, monkeypatch):
-    from testcode.app import create_app
+    from saiworks.app import create_app
 
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     app = create_app(workspace_root=tmp_path)
     session = app.session_store.create(cwd=str(tmp_path))
     session.active_capability_ids = ["skill:git-helper:tool:git_show"]
@@ -206,9 +206,9 @@ def test_skill_command_preserves_restored_session_capabilities(tmp_path, monkeyp
 
 
 def test_capability_commands_isolate_runtime_state_between_sessions(tmp_path, monkeypatch):
-    from testcode.app import create_app
+    from saiworks.app import create_app
 
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     app = create_app(workspace_root=tmp_path)
     first = app.session_store.create(cwd=str(tmp_path))
     second = app.session_store.create(cwd=str(tmp_path))
@@ -225,8 +225,8 @@ def test_capability_commands_isolate_runtime_state_between_sessions(tmp_path, mo
 
 
 def test_run_scope_command_survives_first_execution_initialization(tmp_path, monkeypatch):
-    from testcode.app import create_app
-    from testcode.types import ModelReply, UserRequest
+    from saiworks.app import create_app
+    from saiworks.types import ModelReply, UserRequest
 
     class CapturingModel:
         def __init__(self):
@@ -236,7 +236,7 @@ def test_run_scope_command_survives_first_execution_initialization(tmp_path, mon
             self.visible_tools = {item.name for item in context.available_tools}
             return ModelReply(done=True, message="done")
 
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     app = create_app(workspace_root=tmp_path)
     session = app.session_store.create(cwd=str(tmp_path))
     model = CapturingModel()
@@ -400,8 +400,8 @@ def test_print_exit_info(tmp_path):
         assert "200" in output_str
         assert "Total Tokens:" in output_str
         assert "300" in output_str
-        assert "agent-forge --resume session-xyz" in output_str
-        assert "agent-forge --last" in output_str
+        assert "sai-works --resume session-xyz" in output_str
+        assert "sai-works --last" in output_str
         
     finally:
         sys.stdout = original_stdout

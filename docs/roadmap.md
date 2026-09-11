@@ -1,4 +1,4 @@
-# AgentForge 路线图
+# SaiWorks 路线图
 
 ## 文档职责
 
@@ -98,7 +98,7 @@ MCP 最小主链路已经完成，不再规划第二套 transport 或全量工�
 - 模型增量 streaming。
 - 统一 overlay 栈。
 - 持久化跨进程输入历史。
-- `agent-forge config get/set/list/path`。
+- `sai-works config get/set/list/path`。
 - 日志查询命令与更清晰的失败诊断摘要。
 
 ### 分发与质量

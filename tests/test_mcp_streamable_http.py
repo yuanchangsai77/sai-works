@@ -2,12 +2,12 @@ import json
 
 import pytest
 
-import testcode.app as app_module
-import testcode.mcp.transport as transport_module
-from testcode.app import create_app, create_mcp_client
-from testcode.mcp.client import TransportBackedMCPClient
-from testcode.mcp.config import MCPServerConfig
-from testcode.mcp.transport import MCPProtocolError, StreamableHttpTransport
+import saiworks.app as app_module
+import saiworks.mcp.transport as transport_module
+from saiworks.app import create_app, create_mcp_client
+from saiworks.mcp.client import TransportBackedMCPClient
+from saiworks.mcp.config import MCPServerConfig
+from saiworks.mcp.transport import MCPProtocolError, StreamableHttpTransport
 
 
 class FakeSocket:
@@ -409,7 +409,7 @@ def test_create_app_activates_streamable_http_mcp_tools_on_demand(tmp_path, monk
             return None
 
         def list_tools(self):
-            from testcode.mcp.types import MCPToolDescriptor
+            from saiworks.mcp.types import MCPToolDescriptor
 
             return (
                 MCPToolDescriptor(
@@ -434,7 +434,7 @@ def test_create_app_activates_streamable_http_mcp_tools_on_demand(tmp_path, monk
 
     monkeypatch.chdir(tmp_path)
     monkeypatch.setattr(app_module, "create_mcp_client", lambda server: FakeDiscoveryClient(server))
-    config_dir = tmp_path / ".testcode"
+    config_dir = tmp_path / ".saiworks"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
         """

@@ -1,9 +1,9 @@
-from testcode.model.prompt import ModelPromptBuilder
-from testcode.observability.logger import InMemoryLogger
-from testcode.orchestration.session import SessionContext
-from testcode.tools.base import SimpleTool, ToolContext
-from testcode.tools.registry import ToolRegistry
-from testcode.types import ToolAction, ToolResult, UserRequest
+from saiworks.model.prompt import ModelPromptBuilder
+from saiworks.observability.logger import InMemoryLogger
+from saiworks.orchestration.session import SessionContext
+from saiworks.tools.base import SimpleTool, ToolContext
+from saiworks.tools.registry import ToolRegistry
+from saiworks.types import ToolAction, ToolResult, UserRequest
 
 
 def test_tool_result_contract_for_model_context():

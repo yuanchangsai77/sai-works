@@ -4,11 +4,11 @@ import subprocess
 
 import pytest
 
-from testcode.context import WorkspaceSummaryLoader
-from testcode.model.prompt import ModelPromptBuilder
-from testcode.observability.logger import InMemoryLogger
-from testcode.orchestration.session import SessionContext
-from testcode.types import UserRequest
+from saiworks.context import WorkspaceSummaryLoader
+from saiworks.model.prompt import ModelPromptBuilder
+from saiworks.observability.logger import InMemoryLogger
+from saiworks.orchestration.session import SessionContext
+from saiworks.types import UserRequest
 
 
 def test_workspace_summary_detects_project_markers_and_tree(tmp_path):

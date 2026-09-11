@@ -12,7 +12,7 @@
 `docs/architecture.md`、`docs/roadmap.md`、`docs/extensions/mcp-integration.md`、
 `docs/extensions/skill-system.md` 中展开。
 
-本文档定义 `AgentForge` tool 字段的用途和流向。新增内置 tool、Skill 派生 tool 或 MCP tool 适配层时，先按这里的契约决定信息应该放在哪里。
+本文档定义 `SaiWorks` tool 字段的用途和流向。新增内置 tool、Skill 派生 tool 或 MCP tool 适配层时，先按这里的契约决定信息应该放在哪里。
 
 ## 字段流向
 
@@ -51,7 +51,7 @@
 
 ## 实际案例：`read_file`
 
-`read_file` 是当前内置工具之一，定义在 `src/testcode/tools/builtins/read_file.py`。它的契约可以作为新增读取类工具的参考。
+`read_file` 是当前内置工具之一，定义在 `src/saiworks/tools/builtins/read_file.py`。它的契约可以作为新增读取类工具的参考。
 
 工具定义：
 
@@ -78,7 +78,7 @@ ToolResult(
     success=True,
     output="<README.md 的文本内容>",
     metadata={
-        "path": "/home/changsai/testcode/README.md",
+        "path": "/home/changsai/SaiWorks/README.md",
         "bytes": 4096,
         "truncated": True,
     },
@@ -101,7 +101,7 @@ ToolResult(
   撤销 `test`。成功的 write、execute、destructive 动作会保守推进观察 revision，即使它没有声明
   `workspace_change`。`changed_files` 和 `artifact_refs` 仅用于摘要、恢复与回查，不能自动产生 artifact
   或完成证据；交付物必须显式发布 `artifact` evidence。
-- `read_file_summary()` 基于 metadata 生成用户 run summary，例如 `read /home/changsai/testcode/README.md (4096 bytes truncated)`；这个摘要不写回 `ToolResult.output`。
+- `read_file_summary()` 基于 metadata 生成用户 run summary，例如 `read /home/changsai/SaiWorks/README.md (4096 bytes truncated)`；这个摘要不写回 `ToolResult.output`。
 - 如果读取的是二进制文件，工具返回 `success=False`、`error_code="binary_file"`，`output` 放模型可见的失败原因，`metadata` 保留路径和文件大小供日志/摘要使用。
 
 ## 会话控制工具：`workspace_open`

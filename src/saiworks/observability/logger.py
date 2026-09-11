@@ -12,7 +12,7 @@ from .events import Event
 class InMemoryLogger:
     def __init__(self, base_dir: str | None = None) -> None:
         self.events: list[Event] = []
-        self.base_dir = Path(base_dir or ".testcode/runs")
+        self.base_dir = Path(base_dir or ".saiworks/runs")
         self.run_dir: Path | None = None
         self.run_id: str | None = None
         self.last_run_id: str | None = None

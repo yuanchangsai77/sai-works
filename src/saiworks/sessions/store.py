@@ -35,7 +35,7 @@ MAX_TRACE_TURNS = 20
 class SessionStore:
     def __init__(self, base_dir: str | Path | None = None) -> None:
         root = Path(base_dir) if base_dir is not None else Path(__file__).resolve().parents[3]
-        self.base_dir = root / ".testcode" / "sessions"
+        self.base_dir = root / ".saiworks" / "sessions"
 
     def create(
         self,

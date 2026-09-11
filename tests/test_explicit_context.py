@@ -1,10 +1,10 @@
 from __future__ import annotations
 
-from testcode.context import ExplicitContextLoader
-from testcode.model.prompt import ModelPromptBuilder
-from testcode.observability.logger import InMemoryLogger
-from testcode.orchestration.session import SessionContext
-from testcode.types import UserRequest
+from saiworks.context import ExplicitContextLoader
+from saiworks.model.prompt import ModelPromptBuilder
+from saiworks.observability.logger import InMemoryLogger
+from saiworks.orchestration.session import SessionContext
+from saiworks.types import UserRequest
 
 
 def test_explicit_context_loader_reads_file_directory_and_glob(tmp_path):

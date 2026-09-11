@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from testcode.safety.redaction import REDACTED, is_sensitive_path, redact, redact_text
+from saiworks.safety.redaction import REDACTED, is_sensitive_path, redact, redact_text
 
 
 def test_redact_handles_nested_values_and_sensitive_keys():

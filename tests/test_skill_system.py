@@ -2,16 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 import tomllib
-from testcode.skills import Skill, SkillMetadata, SkillRegistry, parse_frontmatter
+from saiworks.skills import Skill, SkillMetadata, SkillRegistry, parse_frontmatter
 
-from testcode.capabilities import CapabilityWarehouse, LocalToolboxSource, skill_toolbox_specs
-from testcode.orchestration.session import SessionContext
-from testcode.orchestration.engine import ExecutionEngine
-from testcode.orchestration.ext import ContextLoader
-from testcode.types import UserRequest, ToolDefinition, ToolAction, ToolResult, ModelReply
-from testcode.model.prompt import ModelPromptBuilder
-from testcode.observability.logger import InMemoryLogger
-from testcode.tools.registry import ToolRegistry
+from saiworks.capabilities import CapabilityWarehouse, LocalToolboxSource, skill_toolbox_specs
+from saiworks.orchestration.session import SessionContext
+from saiworks.orchestration.engine import ExecutionEngine
+from saiworks.orchestration.ext import ContextLoader
+from saiworks.types import UserRequest, ToolDefinition, ToolAction, ToolResult, ModelReply
+from saiworks.model.prompt import ModelPromptBuilder
+from saiworks.observability.logger import InMemoryLogger
+from saiworks.tools.registry import ToolRegistry
 
 
 def test_parse_frontmatter():
@@ -45,7 +45,7 @@ version: 2.0
 
 
 def test_builtin_skill_metadata_and_guidance_are_actionable():
-    builtins = Path(__file__).parents[1] / "src" / "testcode" / "skills" / "builtins"
+    builtins = Path(__file__).parents[1] / "src" / "saiworks" / "skills" / "builtins"
     registry = SkillRegistry(builtins_dir=builtins, global_dir=None, project_dir=None)
     registry.scan_metadata()
 
@@ -64,7 +64,7 @@ def test_builtin_skill_files_are_declared_as_package_data():
     root = Path(__file__).parents[1]
     config = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
 
-    assert "builtins/*/SKILL.md" in config["tool"]["setuptools"]["package-data"]["testcode.skills"]
+    assert "builtins/*/SKILL.md" in config["tool"]["setuptools"]["package-data"]["saiworks.skills"]
 
 
 def test_registry_scanning_and_override(tmp_path):

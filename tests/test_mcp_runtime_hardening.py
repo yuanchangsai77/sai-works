@@ -7,40 +7,40 @@ from pathlib import Path
 
 import pytest
 
-from testcode.mcp.adapter import (
+from saiworks.mcp.adapter import (
     MAX_MCP_TOOL_RESULT_CHARS,
     MCPToolAdapter,
     build_stable_resource_id,
     build_stable_tool_name,
     map_mcp_tool_risk,
 )
-from testcode.mcp.client import (
+from saiworks.mcp.client import (
     MCPClientError,
     TransportBackedMCPClient,
     _extract_result,
     _flatten_content_blocks,
 )
-from testcode.mcp.config import MCPServerConfig, _build_server_config
-from testcode.mcp.discovery import (
+from saiworks.mcp.config import MCPServerConfig, _build_server_config
+from saiworks.mcp.discovery import (
     MAX_MCP_DESCRIPTOR_CHARS,
     MAX_MCP_TOOLS_PER_SERVER,
     MCPDiscoveryService,
 )
-from testcode.mcp.manager import MCPManager
-from testcode.mcp.provider import MAX_MCP_RESOURCE_CHARS, MCPResourceProvider, MCPToolProvider
-from testcode.mcp.transport import MCPHTTPError
-from testcode.mcp.types import (
+from saiworks.mcp.manager import MCPManager
+from saiworks.mcp.provider import MAX_MCP_RESOURCE_CHARS, MCPResourceProvider, MCPToolProvider
+from saiworks.mcp.transport import MCPHTTPError
+from saiworks.mcp.types import (
     MCPDiscoverySnapshot,
     MCPResourceDescriptor,
     MCPToolCallResult,
     MCPToolDescriptor,
 )
-from testcode.observability.logger import InMemoryLogger
-from testcode.safety.policy import DefaultPolicy
-from testcode.safety.redaction import redact_text
-from testcode.tools.base import SimpleTool
-from testcode.tools.registry import ToolRegistry
-from testcode.types import ToolAction, ToolDefinition, ToolResult, UserRequest
+from saiworks.observability.logger import InMemoryLogger
+from saiworks.safety.policy import DefaultPolicy
+from saiworks.safety.redaction import redact_text
+from saiworks.tools.base import SimpleTool
+from saiworks.tools.registry import ToolRegistry
+from saiworks.types import ToolAction, ToolDefinition, ToolResult, UserRequest
 
 
 def test_unknown_mcp_tools_require_confirmation_and_untrusted_annotations_cannot_lower_risk():
@@ -447,7 +447,7 @@ def test_discovery_cache_reapplies_descriptor_bounds(tmp_path):
 def test_oversized_discovery_cache_is_ignored(tmp_path, monkeypatch):
     cache_path = tmp_path / "mcp-cache.json"
     cache_path.write_text("{}", encoding="utf-8")
-    monkeypatch.setattr("testcode.mcp.discovery.MAX_MCP_DISCOVERY_CACHE_BYTES", 1)
+    monkeypatch.setattr("saiworks.mcp.discovery.MAX_MCP_DISCOVERY_CACHE_BYTES", 1)
     config = MCPServerConfig(name="cached", transport="stdio", command="server")
 
     discovery = MCPDiscoveryService(
@@ -648,7 +648,7 @@ def test_client_stops_paginating_after_tool_limit_overflow():
 
 
 def test_client_rejects_endless_empty_pagination(monkeypatch):
-    monkeypatch.setattr("testcode.mcp.client.MAX_MCP_DISCOVERY_PAGES", 3)
+    monkeypatch.setattr("saiworks.mcp.client.MAX_MCP_DISCOVERY_PAGES", 3)
 
     class Transport:
         def connect(self):

@@ -4,16 +4,16 @@ from threading import Event
 
 import pytest
 
-from testcode.app import create_app
-from testcode.interaction.cli import CLI
-from testcode.interaction.presenter import ConsolePresenter
-from testcode.orchestration.subagents import SubagentCoordinator, SubagentLaunchSpec
-from testcode.orchestration.subagent_runner import SubagentRunner, _issue_subagent_grant
-from testcode.sessions import SessionClusterStore, SessionImageStore, SessionStore
-from testcode.types import EvidenceRecord, ExecutionSummary, ModelReply, RuntimeBlocker, SessionRunTrace, TaskCheckpoint, ToolResult, UserRequest
-from testcode.tools.base import ToolContext
-from testcode.tools.subagents import build_subagent_tools
-from testcode.types import ToolAction
+from saiworks.app import create_app
+from saiworks.interaction.cli import CLI
+from saiworks.interaction.presenter import ConsolePresenter
+from saiworks.orchestration.subagents import SubagentCoordinator, SubagentLaunchSpec
+from saiworks.orchestration.subagent_runner import SubagentRunner, _issue_subagent_grant
+from saiworks.sessions import SessionClusterStore, SessionImageStore, SessionStore
+from saiworks.types import EvidenceRecord, ExecutionSummary, ModelReply, RuntimeBlocker, SessionRunTrace, TaskCheckpoint, ToolResult, UserRequest
+from saiworks.tools.base import ToolContext
+from saiworks.tools.subagents import build_subagent_tools
+from saiworks.types import ToolAction
 
 
 def build_coordinator(tmp_path):
@@ -835,7 +835,7 @@ def test_subagent_aggregate_preserves_workspace_evidence_without_changed_file_li
 
 def test_application_exposes_subagent_lifecycle_tools_on_demand(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
 
     app = create_app(workspace_root=tmp_path)
     warehouse = app.engine.capability_warehouse
@@ -852,7 +852,7 @@ def test_application_exposes_subagent_lifecycle_tools_on_demand(tmp_path, monkey
 
 def test_background_mode_alone_does_not_grant_patch_and_hides_recursive_tools(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
 
     app = create_app(workspace_root=tmp_path, mode="confirm", background=True)
     names = {definition.name for definition in app.engine.tools.definitions()}
@@ -867,8 +867,8 @@ def test_background_mode_alone_does_not_grant_patch_and_hides_recursive_tools(tm
 
 def test_background_subagent_runtime_uses_bounded_model_retry_and_timeout(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "http://127.0.0.1:3000")
-    monkeypatch.setenv("TESTCODE_MODEL_TIMEOUT", "60")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "http://127.0.0.1:3000")
+    monkeypatch.setenv("SAIWORKS_MODEL_TIMEOUT", "60")
 
     app = create_app(workspace_root=tmp_path, background=True)
 
@@ -881,7 +881,7 @@ def test_background_subagent_runtime_uses_bounded_model_retry_and_timeout(tmp_pa
 
 def test_background_subagent_runtime_applies_structured_workspace_write(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     grant = _issue_subagent_grant(
         cluster_id="cluster-test",
         session_id="child-test",
@@ -945,7 +945,7 @@ def test_background_subagent_runtime_applies_structured_workspace_write(tmp_path
 
 def test_delegated_runtime_rejects_request_outside_issued_identity(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     grant = _issue_subagent_grant(
         cluster_id="cluster-test",
         session_id="child-test",
@@ -975,7 +975,7 @@ def test_delegated_runtime_rejects_request_outside_issued_identity(tmp_path, mon
 
 def test_read_only_delegation_blocks_patch_in_runtime_policy(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     grant = _issue_subagent_grant(
         cluster_id="cluster-test",
         session_id="child-test",
@@ -1049,7 +1049,7 @@ def test_persist_run_projects_primary_outcome_to_cluster(tmp_path, outcome, expe
 
 def test_delegated_runtime_rejects_tampered_task_contract(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     grant = _issue_subagent_grant(
         cluster_id="cluster-test",
         session_id="child-test",
@@ -1253,7 +1253,7 @@ def test_spawn_snapshots_current_run_capabilities_without_recursive_tools(tmp_pa
 
 def test_delegated_write_is_limited_to_contract_resources(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     grant = _issue_subagent_grant(
         cluster_id="cluster-test",
         session_id="child-test",
@@ -1301,7 +1301,7 @@ def test_delegated_write_is_limited_to_contract_resources(tmp_path, monkeypatch)
 
 def test_delegated_read_without_resource_is_blocked_by_contract(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     grant = _issue_subagent_grant(
         cluster_id="cluster-test",
         session_id="child-test",

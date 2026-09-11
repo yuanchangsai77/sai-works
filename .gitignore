@@ -30,7 +30,7 @@ coverage.xml
 
 # Local tooling state
 .python-version
-.testcode/
+.saiworks/
 .env
 .env.*
 !.env.example

@@ -5,9 +5,9 @@ import subprocess
 import time
 from pathlib import Path
 
-from testcode.observability.logger import InMemoryLogger
-from testcode.tools.builtin_provider import build_builtin_registry
-from testcode.types import ToolAction, UserRequest
+from saiworks.observability.logger import InMemoryLogger
+from saiworks.tools.builtin_provider import build_builtin_registry
+from saiworks.types import ToolAction, UserRequest
 
 
 def make_registry(*, max_output_bytes: int = 32_000):
@@ -80,8 +80,8 @@ def test_registry_validates_argument_types_and_number_bounds(tmp_path):
 
 
 def test_registry_validates_enum_array_items_and_nested_objects(tmp_path):
-    from testcode.tools.base import SimpleTool
-    from testcode.types import ToolResult
+    from saiworks.tools.base import SimpleTool
+    from saiworks.types import ToolResult
 
     registry = make_registry()
     registry.register(
@@ -388,8 +388,8 @@ def test_shell_exec_persists_cd_and_environment_within_registry_state(tmp_path):
 
     cd_result = registry.execute(ToolAction(name="shell_exec", arguments={"command": "cd child"}), cwd=str(tmp_path))
     pwd_result = registry.execute(ToolAction(name="shell_exec", arguments={"command": "pwd"}), cwd=str(tmp_path))
-    env_set = registry.execute(ToolAction(name="shell_exec", arguments={"command": "export TESTCODE_MARKER=kept"}), cwd=str(tmp_path))
-    env_read = registry.execute(ToolAction(name="shell_exec", arguments={"command": "printf $TESTCODE_MARKER"}), cwd=str(tmp_path))
+    env_set = registry.execute(ToolAction(name="shell_exec", arguments={"command": "export SAIWORKS_MARKER=kept"}), cwd=str(tmp_path))
+    env_read = registry.execute(ToolAction(name="shell_exec", arguments={"command": "printf $SAIWORKS_MARKER"}), cwd=str(tmp_path))
     parent = registry.execute(ToolAction(name="shell_exec", arguments={"command": "cd .. && pwd"}), cwd=str(tmp_path))
 
     assert cd_result.success is True

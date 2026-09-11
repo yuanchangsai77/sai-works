@@ -376,12 +376,12 @@ class CLI:
                 if not raw:
                     return None
                 if not raw.isdigit():
-                    print("[AgentForge] enter a session number")
+                    print("[SaiWorks] enter a session number")
                     continue
                 index = int(raw)
                 if 1 <= index <= len(sessions):
                     return self.load_session(sessions[index - 1].session_id)
-                print(f"[AgentForge] choose a number between 1 and {len(sessions)}")
+                print(f"[SaiWorks] choose a number between 1 and {len(sessions)}")
 
         fd = sys.stdin.fileno()
         previous_settings = termios.tcgetattr(fd)
@@ -559,7 +559,7 @@ class CLI:
 
         if self.session_store is None:
             if self.presenter and hasattr(self.presenter, "_print"):
-                self.presenter._print("[AgentForge] session store is not available")
+                self.presenter._print("[SaiWorks] session store is not available")
             return None
 
         selected_session: StoredSession | None = None
@@ -567,7 +567,7 @@ class CLI:
             selected_session = self.session_store.load(target_id)
             if selected_session is None:
                 if self.presenter and hasattr(self.presenter, "_print"):
-                    self.presenter._print(f"[AgentForge] session '{target_id}' not found")
+                    self.presenter._print(f"[SaiWorks] session '{target_id}' not found")
                 return None
         else:
             selected_session = self.choose_session()
@@ -735,9 +735,9 @@ class CLI:
         
         if session is not None:
             print(f" {GRAY}›{RESET} {BOLD}To resume this conversation, run:{RESET}")
-            print(f"   {CYAN}agent-forge --resume {session.session_id}{RESET}")
+            print(f"   {CYAN}sai-works --resume {session.session_id}{RESET}")
         print(f" {GRAY}›{RESET} {BOLD}To resume the most recent conversation, run:{RESET}")
-        print(f"   {CYAN}agent-forge --last{RESET}")
+        print(f"   {CYAN}sai-works --last{RESET}")
         print()
 
     def _attach_last_run_id(self, session: StoredSession) -> None:

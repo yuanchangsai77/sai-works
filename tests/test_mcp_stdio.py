@@ -4,11 +4,11 @@ from pathlib import Path
 
 import pytest
 
-import testcode.mcp.transport as transport_module
-from testcode.app import create_app, create_mcp_client
-from testcode.mcp.client import TransportBackedMCPClient
-from testcode.mcp.config import MCPServerConfig
-from testcode.mcp.transport import MCPTransportClosed, StdioTransport
+import saiworks.mcp.transport as transport_module
+from saiworks.app import create_app, create_mcp_client
+from saiworks.mcp.client import TransportBackedMCPClient
+from saiworks.mcp.config import MCPServerConfig
+from saiworks.mcp.transport import MCPTransportClosed, StdioTransport
 
 
 SERVER_SCRIPT = r"""
@@ -305,7 +305,7 @@ def test_stdio_bounds_unsolicited_response_queue(tmp_path):
 def test_create_app_activates_stdio_mcp_tool_on_demand(tmp_path, monkeypatch):
     script_path = write_stdio_server(tmp_path)
     monkeypatch.chdir(tmp_path)
-    config_dir = tmp_path / ".testcode"
+    config_dir = tmp_path / ".saiworks"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
         f"""

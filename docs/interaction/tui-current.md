@@ -102,7 +102,7 @@ Open a toolbox with /capabilities open <toolbox-id>
 
 ```text
 
- AgentForge> editable input
+ SaiWorks> editable input
 
  ? for shortcuts                                      model
 ```
@@ -115,7 +115,7 @@ Open a toolbox with /capabilities open <toolbox-id>
 
 ```text
 
- AgentForge> /
+ SaiWorks> /
    Commands (14 total): (1-5 of 14)
    › /clear    Clear terminal screen
      /compact  Compact and summarize conversation context
@@ -149,7 +149,7 @@ Open a toolbox with /capabilities open <toolbox-id>
 或在命令后输入空格/按 `Tab`，都会进入二级候选：
 
 ```text
- AgentForge> /mode
+ SaiWorks> /mode
    Options (3 total):
    › readonly  Reject write operations
      confirm   Ask before write operations
@@ -203,7 +203,7 @@ Select a session to resume (use ↑/↓ keys, Enter to confirm, Esc to cancel):
  ⠋ Model is thinking (8s • esc to interrupt)
 
 
- AgentForge> steer the next turn
+ SaiWorks> steer the next turn
 
   qwen3.6-plus · /workspace
 ```

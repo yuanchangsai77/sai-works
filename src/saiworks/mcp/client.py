@@ -17,7 +17,7 @@ from .types import (
 
 DEFAULT_PROTOCOL_VERSION = "2025-03-26"
 SUPPORTED_PROTOCOL_VERSIONS = {DEFAULT_PROTOCOL_VERSION}
-CLIENT_INFO = {"name": "AgentForge", "version": __version__}
+CLIENT_INFO = {"name": "SaiWorks", "version": __version__}
 
 
 class MCPClient(Protocol):

@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from testcode.app import create_app
-from testcode.context import ContextPackager, ProjectRulesLoader
-from testcode.model.prompt import ModelPromptBuilder
-from testcode.observability.logger import InMemoryLogger
-from testcode.orchestration.session import SessionContext
-from testcode.types import ToolDefinition, UserRequest
+from saiworks.app import create_app
+from saiworks.context import ContextPackager, ProjectRulesLoader
+from saiworks.model.prompt import ModelPromptBuilder
+from saiworks.observability.logger import InMemoryLogger
+from saiworks.orchestration.session import SessionContext
+from saiworks.types import ToolDefinition, UserRequest
 
 
 def test_project_rules_loader_reads_agents_from_root_to_cwd(tmp_path):
@@ -105,7 +105,7 @@ def test_prompt_keeps_project_rules_in_small_context_budget(tmp_path):
 
 
 def test_create_app_registers_context_loaders(tmp_path, monkeypatch):
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     monkeypatch.chdir(tmp_path)
 
     app = create_app()

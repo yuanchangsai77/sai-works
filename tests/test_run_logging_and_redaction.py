@@ -1,7 +1,7 @@
 import json
 
-from testcode.observability.logger import InMemoryLogger
-from testcode.types import ExecutionSummary, RuntimeBlocker, TaskCheckpoint, ToolResult, UserRequest
+from saiworks.observability.logger import InMemoryLogger
+from saiworks.types import ExecutionSummary, RuntimeBlocker, TaskCheckpoint, ToolResult, UserRequest
 
 
 def test_logger_finalize_starts_run_and_writes_details_without_model_turns(tmp_path):

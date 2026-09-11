@@ -2,10 +2,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from testcode.observability.logger import InMemoryLogger
-from testcode.project import ProjectCommandResolver, ProjectDetector
-from testcode.tools.builtin_provider import build_builtin_registry
-from testcode.types import ToolAction
+from saiworks.observability.logger import InMemoryLogger
+from saiworks.project import ProjectCommandResolver, ProjectDetector
+from saiworks.tools.builtin_provider import build_builtin_registry
+from saiworks.types import ToolAction
 
 
 def test_project_detector_returns_shared_profiles(tmp_path):

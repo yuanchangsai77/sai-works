@@ -88,11 +88,11 @@ class ShellSession:
             quoted_cwd = shlex.quote(str(cwd))
             setup = f"cd {quoted_cwd} || exit $?\n"
 
-        marker = f"__TESTCODE_DONE_{time.monotonic_ns()}__"
+        marker = f"__SAIWORKS_DONE_{time.monotonic_ns()}__"
         wrapped = (
             f"{setup}{command}\n"
-            "__testcode_status=$?\n"
-            f"printf '\\n{marker}:%s:%s\\n' \"$__testcode_status\" \"$PWD\"\n"
+            "__saiworks_status=$?\n"
+            f"printf '\\n{marker}:%s:%s\\n' \"$__saiworks_status\" \"$PWD\"\n"
         )
         assert self.process.stdin is not None
         self.process.stdin.write(wrapped.encode("utf-8"))

@@ -4,28 +4,28 @@ from dataclasses import dataclass
 
 import pytest
 
-from testcode.app import create_app
-from testcode.capabilities import (
+from saiworks.app import create_app
+from saiworks.capabilities import (
     InstructionContent,
     LocalInstructionCapability,
     LocalToolboxSource,
     LocalToolboxSpec,
 )
-from testcode.capabilities.model import (
+from saiworks.capabilities.model import (
     ActivatedCapability,
     CapabilityEntry,
     CapabilityManifest,
     ManifestItem,
 )
-from testcode.capabilities.mcp_source import MCPToolboxSource
-from testcode.capabilities.warehouse import CapabilityWarehouse
-from testcode.mcp.config import MCPServerConfig
-from testcode.model.prompt import ModelPromptBuilder
-from testcode.observability.logger import InMemoryLogger
-from testcode.orchestration.session import SessionContext
-from testcode.tools.base import SimpleTool
-from testcode.tools.registry import ToolRegistry
-from testcode.types import ToolAction, ToolResult, UserRequest
+from saiworks.capabilities.mcp_source import MCPToolboxSource
+from saiworks.capabilities.warehouse import CapabilityWarehouse
+from saiworks.mcp.config import MCPServerConfig
+from saiworks.model.prompt import ModelPromptBuilder
+from saiworks.observability.logger import InMemoryLogger
+from saiworks.orchestration.session import SessionContext
+from saiworks.tools.base import SimpleTool
+from saiworks.tools.registry import ToolRegistry
+from saiworks.types import ToolAction, ToolResult, UserRequest
 
 
 def _tool(name: str) -> SimpleTool:
@@ -402,7 +402,7 @@ def test_one_large_toolbox_uses_one_count_unit_but_keeps_leaf_schema_budget():
 
 
 def test_only_session_scoped_skills_are_selected_for_persistence(tmp_path, monkeypatch):
-    skill_dir = tmp_path / ".testcode" / "skills" / "route-guide"
+    skill_dir = tmp_path / ".saiworks" / "skills" / "route-guide"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
         """---
@@ -426,7 +426,7 @@ ROUTE INSTRUCTIONS
 
 
 def test_skill_body_enters_prompt_only_after_leaf_activation(tmp_path, monkeypatch):
-    skill_dir = tmp_path / ".testcode" / "skills" / "route-guide"
+    skill_dir = tmp_path / ".saiworks" / "skills" / "route-guide"
     skill_dir.mkdir(parents=True)
     (skill_dir / "SKILL.md").write_text(
         """---
@@ -457,7 +457,7 @@ PRIVATE ROUTE INSTRUCTIONS
 
 
 def test_builtin_skill_toolboxes_group_specialized_runtime_tools(tmp_path, monkeypatch):
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     app = create_app(workspace_root=tmp_path)
     warehouse = app.engine.capability_warehouse
     initial_names = {definition.name for definition in app.engine.tools.definitions()}
@@ -490,7 +490,7 @@ def test_builtin_skill_toolboxes_group_specialized_runtime_tools(tmp_path, monke
 
 
 def test_session_restores_skill_owned_tool_leaf(tmp_path, monkeypatch):
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     first = create_app(workspace_root=tmp_path)
     manifest = first.engine.capability_warehouse.open_toolbox("skill:git-helper")
     git_show_id = next(item.id for item in manifest.items if item.name == "git_show")

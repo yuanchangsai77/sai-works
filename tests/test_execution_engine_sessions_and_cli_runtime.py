@@ -2,19 +2,19 @@ import json
 
 import pytest
 
-from testcode.app import create_app
-from testcode.interaction.cli import CLI
-from testcode.interaction.presenter import ConsolePresenter
-from testcode.model.types import ModelConnectionError, ModelTimeoutError
-from testcode.model.streaming import NaturalLanguageDelta
-from testcode.observability.logger import InMemoryLogger
-from testcode.orchestration.engine import ExecutionEngine
-from testcode.orchestration.session import SessionContext
-from testcode.safety.guardrails import Guardrails
-from testcode.safety.policy import DefaultPolicy
-from testcode.sessions import SessionStore
-from testcode.tools.builtin_provider import build_builtin_registry
-from testcode.types import (
+from saiworks.app import create_app
+from saiworks.interaction.cli import CLI
+from saiworks.interaction.presenter import ConsolePresenter
+from saiworks.model.types import ModelConnectionError, ModelTimeoutError
+from saiworks.model.streaming import NaturalLanguageDelta
+from saiworks.observability.logger import InMemoryLogger
+from saiworks.orchestration.engine import ExecutionEngine
+from saiworks.orchestration.session import SessionContext
+from saiworks.safety.guardrails import Guardrails
+from saiworks.safety.policy import DefaultPolicy
+from saiworks.sessions import SessionStore
+from saiworks.tools.builtin_provider import build_builtin_registry
+from saiworks.types import (
     EvidenceRecord,
     ExecutionSummary,
     ModelReply,
@@ -31,7 +31,7 @@ from testcode.types import (
 
 
 def test_scaffold_runs_end_to_end(tmp_path, monkeypatch):
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     monkeypatch.chdir(tmp_path)
     (tmp_path / "README.md").write_text("hello", encoding="utf-8")
     app = create_app()
@@ -749,7 +749,7 @@ def test_engine_retries_transient_model_connection_failure(tmp_path):
 
 def test_create_app_tolerates_configured_mcp_servers_without_transport_implementation(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    config_dir = tmp_path / ".testcode"
+    config_dir = tmp_path / ".saiworks"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
         """
@@ -769,7 +769,7 @@ command = "missing-mcp-server-command"
 
 def test_create_app_does_not_connect_mcp_servers_during_startup(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    config_dir = tmp_path / ".testcode"
+    config_dir = tmp_path / ".saiworks"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
         """
@@ -784,7 +784,7 @@ url = "http://example.test/mcp"
     def fail_if_connected(_server):
         raise AssertionError("MCP discovery must not run while creating the app")
 
-    monkeypatch.setattr("testcode.app.create_mcp_client", fail_if_connected)
+    monkeypatch.setattr("saiworks.app.create_mcp_client", fail_if_connected)
 
     app = create_app()
 
@@ -793,7 +793,7 @@ url = "http://example.test/mcp"
 
 def test_explicit_mcp_request_opens_only_selected_toolbox_and_reports_failure(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    config_dir = tmp_path / ".testcode"
+    config_dir = tmp_path / ".saiworks"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
         """
@@ -896,7 +896,7 @@ def test_mcp_code_task_is_not_mistaken_for_external_tool_request(tmp_path, monke
 
 def test_healthy_mcp_request_reaches_model_without_workspace_summary(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    config_dir = tmp_path / ".testcode"
+    config_dir = tmp_path / ".saiworks"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
         """
@@ -915,7 +915,7 @@ command = "fake-amap"
             lifecycle["initialized"] += 1
 
         def list_tools(self):
-            from testcode.mcp.types import MCPToolDescriptor
+            from saiworks.mcp.types import MCPToolDescriptor
 
             return (
                 MCPToolDescriptor(
@@ -931,7 +931,7 @@ command = "fake-amap"
         def close(self):
             pass
 
-    monkeypatch.setattr("testcode.app.create_mcp_client", lambda _config: Client())
+    monkeypatch.setattr("saiworks.app.create_mcp_client", lambda _config: Client())
     app = create_app()
     observed = {"turn_tools": []}
 
@@ -985,7 +985,7 @@ def test_newly_activated_tool_cannot_run_in_same_model_turn(tmp_path):
 
     class Source:
         def catalog_entries(self):
-            from testcode.capabilities.model import CapabilityEntry
+            from saiworks.capabilities.model import CapabilityEntry
 
             return (CapabilityEntry("fake:box", "box", "toolbox", "fake", "Fake box"),)
 
@@ -993,7 +993,7 @@ def test_newly_activated_tool_cannot_run_in_same_model_turn(tmp_path):
             return toolbox_id == "fake:box"
 
         def open_toolbox(self, toolbox_id):
-            from testcode.capabilities.model import CapabilityManifest, ManifestItem
+            from saiworks.capabilities.model import CapabilityManifest, ManifestItem
 
             return CapabilityManifest(
                 toolbox_id=toolbox_id,
@@ -1004,8 +1004,8 @@ def test_newly_activated_tool_cannot_run_in_same_model_turn(tmp_path):
             )
 
         def activate(self, capability_id):
-            from testcode.capabilities.model import ActivatedCapability
-            from testcode.tools.base import SimpleTool
+            from saiworks.capabilities.model import ActivatedCapability
+            from saiworks.tools.base import SimpleTool
 
             tool = SimpleTool(
                 name="leaf",
@@ -1016,8 +1016,8 @@ def test_newly_activated_tool_cannot_run_in_same_model_turn(tmp_path):
             )
             return ActivatedCapability(capability_id, "fake:box", "tool", tool=tool)
 
-    from testcode.capabilities.tools import build_warehouse_tools
-    from testcode.capabilities.warehouse import CapabilityWarehouse
+    from saiworks.capabilities.tools import build_warehouse_tools
+    from saiworks.capabilities.warehouse import CapabilityWarehouse
 
     warehouse = CapabilityWarehouse([Source()], registry, logger=logger)
     for tool in build_warehouse_tools(warehouse):
@@ -2982,7 +2982,7 @@ def test_session_store_persists_session_trace_and_writes_trace_log(tmp_path):
     assert loaded.resume_state.last_run_id == "run-1"
     assert loaded.resume_state.last_outcome == "completed"
     assert loaded.active_capability_ids == ["mcp:amap:maps_direction_driving"]
-    trace_log = tmp_path / ".testcode" / "sessions" / f"{session.session_id}.trace.log"
+    trace_log = tmp_path / ".saiworks" / "sessions" / f"{session.session_id}.trace.log"
     assert trace_log.exists()
     text = trace_log.read_text(encoding="utf-8")
     assert "Session Trace Summary" in text
@@ -2990,7 +2990,7 @@ def test_session_store_persists_session_trace_and_writes_trace_log(tmp_path):
     assert "- prompt: inspect workspace" in text
     assert 'action detail: list_dir args={"path":"."}' not in text
     assert "result detail: list_dir [ok] found 3 entries" not in text
-    replay_log = tmp_path / ".testcode" / "sessions" / f"{session.session_id}.replay.log"
+    replay_log = tmp_path / ".saiworks" / "sessions" / f"{session.session_id}.replay.log"
     assert replay_log.exists() is False
 
 
@@ -3175,11 +3175,11 @@ def test_chat_persists_session_trace_from_logger_summary(tmp_path, monkeypatch):
     assert stored.resume_state.last_run_id == stored.trace[0].run_id
     assert stored.resume_state.last_user_prompt == "hello"
     assert stored.resume_state.last_assistant_message == "echo:hello"
-    trace_log = tmp_path / ".testcode" / "sessions" / f"{stored.session_id}.trace.log"
+    trace_log = tmp_path / ".saiworks" / "sessions" / f"{stored.session_id}.trace.log"
     trace_text = trace_log.read_text(encoding="utf-8")
     assert "Resume State" in trace_text
     assert "Action detail:" not in trace_text
-    replay_log = tmp_path / ".testcode" / "sessions" / f"{stored.session_id}.replay.log"
+    replay_log = tmp_path / ".saiworks" / "sessions" / f"{stored.session_id}.replay.log"
     assert replay_log.exists() is False
 
 

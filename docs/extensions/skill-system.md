@@ -64,11 +64,11 @@ When writing or running Python unit tests:
 
 Skills are discovered from three locations:
 
-1. **Built-in Skills**: Shipped under `src/testcode/skills/builtins/`; the
+1. **Built-in Skills**: Shipped under `src/saiworks/skills/builtins/`; the
    application resolves this directory relative to the installed package.
-2. **User Global Skills**: Stored in `~/.testcode/skills/`.
+2. **User Global Skills**: Stored in `~/.saiworks/skills/`.
 3. **Project-scoped Skills**: Stored inside the workspace at
-   `.testcode/skills/`.
+   `.saiworks/skills/`.
 
 The registry scans in that order and stores Skills by name, so a later
 project-scoped Skill replaces a same-named global or built-in Skill; a global
@@ -99,7 +99,7 @@ graph TD
 
 ### Core Abstractions
 
-We define the core models in `src/testcode/skills/model.py`:
+We define the core models in `src/saiworks/skills/model.py`:
 
 ```python
 from dataclasses import dataclass
@@ -118,7 +118,7 @@ class Skill:
     content: str  # Markdown instructions under the frontmatter; packaging applies prompt budget.
 ```
 
-The registry is implemented in `src/testcode/skills/registry.py`:
+The registry is implemented in `src/saiworks/skills/registry.py`:
 
 ```python
 class SkillRegistry:
@@ -141,14 +141,14 @@ class SkillRegistry:
 
 The active application path is:
 
-### 1. Application Assembly (`src/testcode/app.py`)
+### 1. Application Assembly (`src/saiworks/app.py`)
 - Initialize the `SkillRegistry` with paths resolved dynamically.
 - Adapt the registry and its explicitly assigned local tools into `LocalToolboxSpec`, then attach the
   shared `LocalToolboxSource` to `CapabilityWarehouse`.
 - Use the shared `LocalToolboxSource` as the only activation path. Trigger strings remain catalog tags for
   discovery; they do not silently inject instructions.
 
-### 2. Execution Engine (`src/testcode/orchestration/engine.py`)
+### 2. Execution Engine (`src/saiworks/orchestration/engine.py`)
 - Restore only persisted `active_capability_ids` at the start of a session run.
 - Apply activated generic `InstructionContent` objects from `CapabilityWarehouse` to `SessionContext`.
 - Persist session-scoped capability ids into the execution summary; instruction names are not a parallel

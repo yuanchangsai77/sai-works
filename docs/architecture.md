@@ -1,10 +1,10 @@
-# AgentForge 核心架构
+# SaiWorks 核心架构
 
 ## 文档职责
 
 本文档只回答三个问题：
 
-- `AgentForge` runtime 由哪些层组成
+- `SaiWorks` runtime 由哪些层组成
 - 每一层的职责边界是什么
 - 关键对象和数据流如何协作
 
@@ -22,7 +22,7 @@
 
 ## 1. 产品定位
 
-`AgentForge` is a large-model-driven CLI workbench. It is not an autonomous decision engine. Its responsibility is to:
+`SaiWorks` is a large-model-driven CLI workbench. It is not an autonomous decision engine. Its responsibility is to:
 
 - receive user intent from the command line
 - collect execution context from the local environment
@@ -48,7 +48,7 @@ The system's intelligence comes from the model. The CLI is the runtime shell tha
 Current source layout:
 
 ```text
-src/testcode/
+src/saiworks/
   app.py             application composition and CLI argument dispatch
   config.py          .env loading and runtime configuration
   context/           project rules, workspace summaries, and explicit context loaders
@@ -62,7 +62,7 @@ src/testcode/
   types.py           cross-layer request, reply, tool, summary, and session records
 ```
 
-`src/testcode/session_store.py` has been removed. Session persistence now lives only under `src/testcode/sessions/`.
+`src/saiworks/session_store.py` has been removed. Session persistence now lives only under `src/saiworks/sessions/`.
 
 ### 3.0 Application Composition
 
@@ -76,9 +76,9 @@ Responsibilities:
 
 Core files:
 
-- `src/testcode/app.py`
-- `src/testcode/__main__.py`
-- `src/testcode/config.py`
+- `src/saiworks/app.py`
+- `src/saiworks/__main__.py`
+- `src/saiworks/config.py`
 
 Composition structure:
 
@@ -97,9 +97,9 @@ Responsibilities:
 
 Core files & folders:
 
-- `src/testcode/interaction/cli.py`
-- `src/testcode/interaction/presenter.py`
-- `src/testcode/interaction/commands/` (decoupled slash command subsystem, including `base.py`, `session_cmds.py`, `sys_cmds.py`, and package factory)
+- `src/saiworks/interaction/cli.py`
+- `src/saiworks/interaction/presenter.py`
+- `src/saiworks/interaction/commands/` (decoupled slash command subsystem, including `base.py`, `session_cmds.py`, `sys_cmds.py`, and package factory)
 
 
 ### 3.2 Session Orchestration Layer
@@ -114,9 +114,9 @@ Responsibilities:
 
 Core files:
 
-- `src/testcode/orchestration/session.py`
-- `src/testcode/orchestration/engine.py`
-- `src/testcode/orchestration/control.py`
+- `src/saiworks/orchestration/session.py`
+- `src/saiworks/orchestration/engine.py`
+- `src/saiworks/orchestration/control.py`
 
 Orchestration structure:
 
@@ -141,10 +141,10 @@ Responsibilities:
 
 Core files:
 
-- `src/testcode/context/project_rules.py`
-- `src/testcode/context/workspace.py`
-- `src/testcode/context/explicit.py`
-- `src/testcode/context/packager.py`
+- `src/saiworks/context/project_rules.py`
+- `src/saiworks/context/workspace.py`
+- `src/saiworks/context/explicit.py`
+- `src/saiworks/context/packager.py`
 
 Context structure:
 
@@ -207,11 +207,11 @@ Responsibilities:
 
 Core files:
 
-- `src/testcode/model/protocol.py`
-- `src/testcode/model/client.py`
-- `src/testcode/model/prompt.py`
-- `src/testcode/model/parser.py`
-- `src/testcode/model/types.py`
+- `src/saiworks/model/protocol.py`
+- `src/saiworks/model/client.py`
+- `src/saiworks/model/prompt.py`
+- `src/saiworks/model/parser.py`
+- `src/saiworks/model/types.py`
 
 Model structure:
 
@@ -246,12 +246,12 @@ Responsibilities:
 
 Core files:
 
-- `src/testcode/tools/base.py`
-- `src/testcode/tools/registry.py`
-- `src/testcode/tools/builtin_provider.py`
-- `src/testcode/tools/builtin_provider.py` (built-in provider and standalone registry factory)
-- `src/testcode/tools/shared.py`
-- `src/testcode/tools/builtins/`
+- `src/saiworks/tools/base.py`
+- `src/saiworks/tools/registry.py`
+- `src/saiworks/tools/builtin_provider.py`
+- `src/saiworks/tools/builtin_provider.py` (built-in provider and standalone registry factory)
+- `src/saiworks/tools/shared.py`
+- `src/saiworks/tools/builtins/`
 
 Tool structure:
 
@@ -290,11 +290,11 @@ Responsibilities:
 
 Core files:
 
-- `src/testcode/safety/policy.py`
-- `src/testcode/safety/guardrails.py`
-- `src/testcode/safety/content/`
-- `src/testcode/safety/secret_patterns.py`
-- `src/testcode/safety/redaction.py`
+- `src/saiworks/safety/policy.py`
+- `src/saiworks/safety/guardrails.py`
+- `src/saiworks/safety/content/`
+- `src/saiworks/safety/secret_patterns.py`
+- `src/saiworks/safety/redaction.py`
 
 安全模式、审批、危险命令识别和凭据写入阻断的当前行为见
 [执行安全](core/execution-safety.md)。
@@ -317,8 +317,8 @@ event payload or duplicate terminal tool outputs.
 
 Core files:
 
-- `src/testcode/observability/events.py`
-- `src/testcode/observability/logger.py`
+- `src/saiworks/observability/events.py`
+- `src/saiworks/observability/logger.py`
 
 ### 3.7 Configuration and Persistence
 
@@ -335,25 +335,25 @@ Responsibilities:
 
 Core files:
 
-- `src/testcode/config.py`
-- `src/testcode/sessions/__init__.py`
-- `src/testcode/sessions/store.py`
-- `src/testcode/sessions/cluster.py`
-- `src/testcode/orchestration/subagents.py`
-- `src/testcode/orchestration/subagent_runner.py`
+- `src/saiworks/config.py`
+- `src/saiworks/sessions/__init__.py`
+- `src/saiworks/sessions/store.py`
+- `src/saiworks/sessions/cluster.py`
+- `src/saiworks/orchestration/subagents.py`
+- `src/saiworks/orchestration/subagent_runner.py`
 
 Configuration structure:
 
 - `.env` loading only fills missing environment variables. It resolves relative
   to the installed/source package checkout, not to an arbitrary target workspace.
 - `RuntimeConfig` normalizes model connection settings, retry policy, runtime limits, safety mode, and MCP servers.
-- `~/.testcode/config.toml` supplies user defaults; `.testcode/config.toml` overrides them for the current project.
+- `~/.saiworks/config.toml` supplies user defaults; `.saiworks/config.toml` overrides them for the current project.
 - Configurable limits have internal hard caps. Exceeding a cap is a startup error rather than a silent fallback; see `docs/reference/configuration.md`.
 
 Persistence structure:
 
 - `SessionStore` derives its storage root from the package/source checkout and
-  writes JSON files under that root's `.testcode/sessions/`; it does not derive
+  writes JSON files under that root's `.saiworks/sessions/`; it does not derive
   this path from the active target workspace.
 - Stored sessions are bounded recovery snapshots, not transcript archives. They include recent conversation, recent
   lightweight run summaries, the complete lightweight run-id index, active Skill/capability ids and one authoritative derived resume checkpoint.

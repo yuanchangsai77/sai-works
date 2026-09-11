@@ -5,20 +5,20 @@ import urllib.request
 
 import pytest
 
-from testcode.app import create_model_client
-from testcode.model.client import OpenAICompatibleModelClient, StubModelClient
-from testcode.model.parser import ModelReplyParser
-from testcode.model.prompt import ModelPromptBuilder
-from testcode.context.packager import ContextPackager, ContextSegment
-from testcode.model.types import (
+from saiworks.app import create_model_client
+from saiworks.model.client import OpenAICompatibleModelClient, StubModelClient
+from saiworks.model.parser import ModelReplyParser
+from saiworks.model.prompt import ModelPromptBuilder
+from saiworks.context.packager import ContextPackager, ContextSegment
+from saiworks.model.types import (
     ModelClientConfig,
     ModelConnectionError,
     ModelServiceError,
     ModelTimeoutError,
 )
-from testcode.observability.logger import InMemoryLogger
-from testcode.orchestration.session import SessionContext
-from testcode.types import SessionResumeState, SessionRunTrace, SessionTurnTrace, ToolDefinition, UserRequest
+from saiworks.observability.logger import InMemoryLogger
+from saiworks.orchestration.session import SessionContext
+from saiworks.types import SessionResumeState, SessionRunTrace, SessionTurnTrace, ToolDefinition, UserRequest
 
 
 def test_post_json_wraps_timeout_as_runtime_error(monkeypatch):
@@ -135,8 +135,8 @@ def test_post_json_rejects_invalid_json_and_missing_choices(monkeypatch):
 
 
 def test_create_model_client_reads_timeout_from_env(monkeypatch):
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "http://127.0.0.1:3000")
-    monkeypatch.setenv("TESTCODE_MODEL_TIMEOUT", "2.25")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "http://127.0.0.1:3000")
+    monkeypatch.setenv("SAIWORKS_MODEL_TIMEOUT", "2.25")
 
     client = create_model_client(logger=None)
 
@@ -395,7 +395,7 @@ def test_response_read_enforces_total_deadline(monkeypatch):
             return b"x"
 
     times = iter([0.0, 0.6, 1.1])
-    monkeypatch.setattr("testcode.model.client.time.monotonic", lambda: next(times))
+    monkeypatch.setattr("saiworks.model.client.time.monotonic", lambda: next(times))
 
     with pytest.raises(TimeoutError, match="response_total timeout exceeded"):
         client._read_response(SlowResponse(), deadline=1.0)
@@ -427,7 +427,7 @@ def test_active_sse_refreshes_idle_window_past_ordinary_request_timeout(monkeypa
             return next(chunks)
 
     times = iter([0.0, 1.2, 2.4])
-    monkeypatch.setattr("testcode.model.client.time.monotonic", lambda: next(times))
+    monkeypatch.setattr("saiworks.model.client.time.monotonic", lambda: next(times))
 
     result = b"".join(
         client._iter_response_chunks(
@@ -491,7 +491,7 @@ def test_sse_total_limit_is_distinct_from_idle_timeout(monkeypatch):
         def read1(self, _size):
             raise TimeoutError("total limit reached")
 
-    monkeypatch.setattr("testcode.model.client.time.monotonic", lambda: 9.5)
+    monkeypatch.setattr("saiworks.model.client.time.monotonic", lambda: 9.5)
 
     with pytest.raises(TimeoutError, match="stream_total timeout exceeded after 10 seconds"):
         next(
@@ -504,7 +504,7 @@ def test_sse_total_limit_is_distinct_from_idle_timeout(monkeypatch):
 
 
 def test_create_model_client_uses_stub_without_base_url(monkeypatch):
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
 
     client = create_model_client(logger=None)
 
@@ -550,7 +550,7 @@ def test_build_messages_keeps_tool_definitions_in_stable_system_prefix():
     assert "Available tools:" in system
     assert "general-purpose agent runtime" in system
     assert "not your identity" in system
-    assert "testcode is the orchestration" not in system
+    assert "saiworks is the orchestration" not in system
     assert "- patch: Apply a unified diff." in system
     assert "- read_file: Read a workspace file." in system
     assert "argument path: File path." in system

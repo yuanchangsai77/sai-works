@@ -3,8 +3,8 @@ from types import SimpleNamespace
 
 import pytest
 
-import testcode.app as app_module
-from testcode import __version__
+import saiworks.app as app_module
+from saiworks import __version__
 
 
 class FakePresenter:
@@ -43,18 +43,18 @@ class FakeApp:
 
 
 def test_main_version_reports_package_version(monkeypatch, capsys):
-    monkeypatch.setattr(sys, "argv", ["testcode", "--version"])
+    monkeypatch.setattr(sys, "argv", ["saiworks", "--version"])
 
     with pytest.raises(SystemExit) as exit_info:
         app_module.main()
 
     assert exit_info.value.code == 0
-    assert capsys.readouterr().out.strip() == f"AgentForge {__version__}"
+    assert capsys.readouterr().out.strip() == f"SaiWorks {__version__}"
 
 
 def test_main_once_dispatches_prompt_to_app_run(monkeypatch, tmp_path):
     fake = FakeApp()
-    monkeypatch.setattr(sys, "argv", ["testcode", "--once", "inspect", "workspace"])
+    monkeypatch.setattr(sys, "argv", ["saiworks", "--once", "inspect", "workspace"])
     monkeypatch.setattr(app_module, "create_app", lambda mode, **_kwargs: fake)
     monkeypatch.chdir(tmp_path)
 
@@ -68,7 +68,7 @@ def test_main_once_dispatches_prompt_to_app_run(monkeypatch, tmp_path):
 def test_main_stream_flag_overrides_model_transport_for_one_invocation(monkeypatch, tmp_path):
     fake = FakeApp()
     created = []
-    monkeypatch.setattr(sys, "argv", ["testcode", "--once", "--stream", "inspect"])
+    monkeypatch.setattr(sys, "argv", ["saiworks", "--once", "--stream", "inspect"])
     monkeypatch.setattr(
         app_module,
         "create_app",
@@ -86,7 +86,7 @@ def test_main_once_passes_context_paths_to_request_metadata(monkeypatch, tmp_pat
     monkeypatch.setattr(
         sys,
         "argv",
-        ["testcode", "--once", "--context", "README.md", "--context", "docs/*.md", "inspect"],
+        ["saiworks", "--once", "--context", "README.md", "--context", "docs/*.md", "inspect"],
     )
     monkeypatch.setattr(app_module, "create_app", lambda mode, **_kwargs: fake)
     monkeypatch.chdir(tmp_path)
@@ -114,7 +114,7 @@ def test_main_once_creates_persisted_session_for_subagent_runtime(monkeypatch, t
             return session
 
     fake.session_store = Store()
-    monkeypatch.setattr(sys, "argv", ["testcode", "--once", "delegate"])
+    monkeypatch.setattr(sys, "argv", ["saiworks", "--once", "delegate"])
     monkeypatch.setattr(app_module, "create_app", lambda mode, **_kwargs: fake)
     monkeypatch.chdir(tmp_path)
 
@@ -137,7 +137,7 @@ def test_main_once_resume_persists_completed_run(monkeypatch, tmp_path):
         resume_state=None,
     )
     fake.load_session = lambda _session_id: session
-    monkeypatch.setattr(sys, "argv", ["testcode", "--once", "--resume", "session-1", "continue"])
+    monkeypatch.setattr(sys, "argv", ["saiworks", "--once", "--resume", "session-1", "continue"])
     created_roots = []
     monkeypatch.setattr(
         app_module,
@@ -172,7 +172,7 @@ def test_main_once_resume_persists_interrupted_run(monkeypatch, tmp_path):
         raise KeyboardInterrupt
 
     fake.run = interrupt
-    monkeypatch.setattr(sys, "argv", ["testcode", "--once", "--resume", "session-1", "continue"])
+    monkeypatch.setattr(sys, "argv", ["saiworks", "--once", "--resume", "session-1", "continue"])
     monkeypatch.setattr(app_module, "create_app", lambda mode, **_kwargs: fake)
 
     app_module.main()
@@ -184,7 +184,7 @@ def test_main_once_resume_persists_interrupted_run(monkeypatch, tmp_path):
 
 def test_main_chat_passes_context_paths(monkeypatch, tmp_path):
     fake = FakeApp()
-    monkeypatch.setattr(sys, "argv", ["testcode", "--context", "README.md", "inspect"])
+    monkeypatch.setattr(sys, "argv", ["saiworks", "--context", "README.md", "inspect"])
     monkeypatch.setattr(app_module, "create_app", lambda mode, **_kwargs: fake)
     monkeypatch.chdir(tmp_path)
 
@@ -195,7 +195,7 @@ def test_main_chat_passes_context_paths(monkeypatch, tmp_path):
 
 def test_main_list_dispatches_to_presenter(monkeypatch):
     fake = FakeApp()
-    monkeypatch.setattr(sys, "argv", ["testcode", "--list"])
+    monkeypatch.setattr(sys, "argv", ["saiworks", "--list"])
     monkeypatch.setattr(app_module, "create_app", lambda mode, **_kwargs: fake)
 
     app_module.main()
@@ -204,7 +204,7 @@ def test_main_list_dispatches_to_presenter(monkeypatch):
 
 
 def test_main_rejects_resume_and_last_together(monkeypatch):
-    monkeypatch.setattr(sys, "argv", ["testcode", "--resume", "abc", "--last"])
+    monkeypatch.setattr(sys, "argv", ["saiworks", "--resume", "abc", "--last"])
     monkeypatch.setattr(app_module, "create_app", lambda mode, **_kwargs: FakeApp())
 
     with pytest.raises(SystemExit, match="Use either --resume or --last"):

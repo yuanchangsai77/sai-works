@@ -3,13 +3,13 @@ from __future__ import annotations
 import shlex
 import sys
 
-from testcode.interaction.presenter import ConsolePresenter
-from testcode.observability.logger import InMemoryLogger
-from testcode.orchestration.engine import ExecutionEngine
-from testcode.safety.guardrails import Guardrails
-from testcode.safety.policy import DefaultPolicy
-from testcode.tools.builtin_provider import build_builtin_registry
-from testcode.types import ExecutionSummary, ModelReply, ToolAction, ToolResult, UserRequest
+from saiworks.interaction.presenter import ConsolePresenter
+from saiworks.observability.logger import InMemoryLogger
+from saiworks.orchestration.engine import ExecutionEngine
+from saiworks.safety.guardrails import Guardrails
+from saiworks.safety.policy import DefaultPolicy
+from saiworks.tools.builtin_provider import build_builtin_registry
+from saiworks.types import ExecutionSummary, ModelReply, ToolAction, ToolResult, UserRequest
 
 
 def test_agent_repairs_after_failed_tests_and_verifies_success(tmp_path):

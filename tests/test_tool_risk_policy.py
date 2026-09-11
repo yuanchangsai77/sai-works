@@ -1,7 +1,7 @@
 import pytest
 
-from testcode.safety.policy import DefaultPolicy
-from testcode.types import ToolAction, ToolDefinition
+from saiworks.safety.policy import DefaultPolicy
+from saiworks.types import ToolAction, ToolDefinition
 
 
 def decision_for(mode: str, risk_level: str):
@@ -58,7 +58,7 @@ def test_policy_rejects_unknown_mode():
         "git reset --hard HEAD",
         "git clean -fd",
         "git clean -xdf",
-        "printf x > /etc/testcode.conf",
+        "printf x > /etc/saiworks.conf",
     ],
 )
 def test_policy_marks_dangerous_shell_commands_destructive(command):

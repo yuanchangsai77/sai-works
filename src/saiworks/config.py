@@ -96,15 +96,15 @@ def load_dotenv(env_path: str | Path | None = None) -> None:
 def load_runtime_config(mode: str | None = None, cwd: str | Path | None = None) -> RuntimeConfig:
     tuning = _load_tuning(cwd)
     return RuntimeConfig(
-        model_base_url=os.getenv("TESTCODE_MODEL_BASE_URL", "").strip(),
-        model_name=os.getenv("TESTCODE_MODEL_NAME", "gpt-5.4").strip() or "gpt-5.4",
-        model_timeout=_float_env("TESTCODE_MODEL_TIMEOUT", 60.0),
+        model_base_url=os.getenv("SAIWORKS_MODEL_BASE_URL", "").strip(),
+        model_name=os.getenv("SAIWORKS_MODEL_NAME", "gpt-5.4").strip() or "gpt-5.4",
+        model_timeout=_float_env("SAIWORKS_MODEL_TIMEOUT", 60.0),
         model_stream_max_seconds=min(
             MAX_MODEL_STREAM_SECONDS,
-            _float_env("TESTCODE_MODEL_STREAM_MAX_SECONDS", 900.0),
+            _float_env("SAIWORKS_MODEL_STREAM_MAX_SECONDS", 900.0),
         ),
-        model_stream=_bool_env("TESTCODE_MODEL_STREAM", False),
-        mode=mode or os.getenv("TESTCODE_MODE", "confirm").strip() or "confirm",
+        model_stream=_bool_env("SAIWORKS_MODEL_STREAM", False),
+        mode=mode or os.getenv("SAIWORKS_MODE", "confirm").strip() or "confirm",
         mcp_servers=load_mcp_server_configs(cwd=cwd),
         model_retry=tuning[0],
         orchestration=tuning[1],
@@ -115,7 +115,7 @@ def load_runtime_config(mode: str | None = None, cwd: str | Path | None = None) 
 def _load_tuning(cwd: str | Path | None) -> tuple[ModelRetryConfig, OrchestrationConfig, RuntimeLimits]:
     root = Path(cwd or os.getcwd())
     values: dict[str, object] = {}
-    for path in (Path.home() / ".testcode" / "config.toml", root / ".testcode" / "config.toml"):
+    for path in (Path.home() / ".saiworks" / "config.toml", root / ".saiworks" / "config.toml"):
         if not path.exists():
             continue
         raw = tomllib.loads(path.read_text(encoding="utf-8"))

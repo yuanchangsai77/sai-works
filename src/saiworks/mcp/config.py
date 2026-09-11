@@ -37,8 +37,8 @@ class MCPServerConfig:
 
 def load_mcp_server_configs(cwd: str | Path | None = None) -> tuple[MCPServerConfig, ...]:
     project_root = Path(cwd or os.getcwd())
-    global_path = Path.home() / ".testcode" / "config.toml"
-    project_path = project_root / ".testcode" / "config.toml"
+    global_path = Path.home() / ".saiworks" / "config.toml"
+    project_path = project_root / ".saiworks" / "config.toml"
 
     merged: dict[str, MCPServerConfig] = {}
     for path in (global_path, project_path):
@@ -155,7 +155,7 @@ def _expand_env(value: str) -> str:
 
 def _apply_env_overrides(server: MCPServerConfig) -> MCPServerConfig:
     normalized_name = re.sub(r"[^A-Z0-9]", "_", server.name.upper())
-    prefix = f"TESTCODE_MCP_{normalized_name}_"
+    prefix = f"SAIWORKS_MCP_{normalized_name}_"
     values: dict[str, Any] = {}
     for field_name in ("transport", "tool_name_prefix", "command", "url"):
         raw = os.getenv(prefix + field_name.upper())

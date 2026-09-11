@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import pytest
 
-from testcode.intent import RequestIntent, RequestIntentClassifier
-from testcode.orchestration.progress import (
+from saiworks.intent import RequestIntent, RequestIntentClassifier
+from saiworks.orchestration.progress import (
     DefaultProgressPolicy,
     ProgressContext,
 )
-from testcode.types import ToolResult
+from saiworks.types import ToolResult
 
 
 @pytest.mark.parametrize(

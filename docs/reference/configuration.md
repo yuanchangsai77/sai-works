@@ -7,17 +7,17 @@ MCP 服务器字段的 transport 语义仍以 [MCP 集成](../extensions/mcp-int
 
 ## 配置来源与优先级
 
-模型地址、模型名、模型超时和运行模式从 `AgentForge` 源码根目录的 `.env`
+模型地址、模型名、模型超时和运行模式从 `SaiWorks` 源码根目录的 `.env`
 或同名环境变量读取；已有环境变量不会被 `.env` 覆盖。当前实现不会自动加载任意目标
 工作区中的 `.env`。以已安装包运行时，优先使用进程环境变量，避免依赖安装目录中的
 `.env`。
 
-命令行 `--mode` 会覆盖 `TESTCODE_MODE`。其余模型连接项目前没有命令行覆盖。
+命令行 `--mode` 会覆盖 `SAIWORKS_MODE`。其余模型连接项目前没有命令行覆盖。
 
 运行策略与 MCP 服务从以下 TOML 文件读取：
 
-1. `~/.testcode/config.toml`：用户全局默认值。
-2. `.testcode/config.toml`：当前项目覆盖同名配置。
+1. `~/.saiworks/config.toml`：用户全局默认值。
+2. `.saiworks/config.toml`：当前项目覆盖同名配置。
 
 同名 MCP server 以项目条目整体替换全局条目，不做字段级合并。
 
@@ -48,7 +48,7 @@ max_run_seconds = 900
 # 默认 1，且不会超过 model.retry.max_retries。
 subagent_max_model_retries = 1
 # 后台子会话单次模型请求总截止时间，默认 120 秒，内部硬上限 300 秒。
-# 该值独立于前台 TESTCODE_MODEL_TIMEOUT，避免前台交互预算隐式截断后台任务。
+# 该值独立于前台 SAIWORKS_MODEL_TIMEOUT，避免前台交互预算隐式截断后台任务。
 subagent_model_timeout = 120
 
 [limits]
@@ -86,7 +86,7 @@ read_timeout = 300
 
 `tool_output_bytes` 限制命令和文本搜索的保留输出；`read_file_bytes` 独立限制文件读取，避免一项配置意外放大所有上下文来源。
 
-`TESTCODE_MODEL_TIMEOUT` 只控制前台模型请求；`orchestration.subagent_model_timeout` 单独控制
+`SAIWORKS_MODEL_TIMEOUT` 只控制前台模型请求；`orchestration.subagent_model_timeout` 单独控制
 后台子会话。后台任务通常携带委派合同、工具 schema 和恢复上下文，首 token 延迟可能高于前台短对话，
 因此默认预算更长，但仍受 300 秒内部硬上限和独立重试次数约束。
 
@@ -103,24 +103,24 @@ read_timeout = 300
 源码 checkout 中的 `.env` 只需要保留一组当前使用的模型连接配置：
 
 ```env
-TESTCODE_MODEL_BASE_URL=http://127.0.0.1:3000
-TESTCODE_MODEL_NAME=gpt-5.4
-TESTCODE_MODEL_TIMEOUT=60
-TESTCODE_MODEL_STREAM_MAX_SECONDS=900
-TESTCODE_MODEL_STREAM=false
-TESTCODE_MODE=confirm
+SAIWORKS_MODEL_BASE_URL=http://127.0.0.1:3000
+SAIWORKS_MODEL_NAME=gpt-5.4
+SAIWORKS_MODEL_TIMEOUT=60
+SAIWORKS_MODEL_STREAM_MAX_SECONDS=900
+SAIWORKS_MODEL_STREAM=false
+SAIWORKS_MODE=confirm
 ```
 
 当模型地址是 `localhost` 或 loopback IP 时，模型客户端始终绕过环境代理。普通 JSON 响应把
-`TESTCODE_MODEL_TIMEOUT` 作为请求总时限；SSE 用它限制建连、首包以及流开始后的最大无数据间隔，
-每收到传输块都会刷新空闲计时。`TESTCODE_MODEL_STREAM_MAX_SECONDS` 是独立的流总时长安全上限，默认
+`SAIWORKS_MODEL_TIMEOUT` 作为请求总时限；SSE 用它限制建连、首包以及流开始后的最大无数据间隔，
+每收到传输块都会刷新空闲计时。`SAIWORKS_MODEL_STREAM_MAX_SECONDS` 是独立的流总时长安全上限，默认
 900 秒，持续有数据的长回复不会再被 60 秒空闲时限误杀。
-`TESTCODE_MODEL_STREAM=true` 启用 OpenAI-compatible SSE 传输；模型客户端逐块接收并组装文本与工具调用，
+`SAIWORKS_MODEL_STREAM=true` 启用 OpenAI-compatible SSE 传输；模型客户端逐块接收并组装文本与工具调用，
 交互终端只投影完整协议中的自然语言字段。工具名称、参数和动作不会增量展示，编排层仍只消费通过完整
 协议校验后的单次回复。默认关闭以兼容不支持流式的直接模型端点。
 命令行可用 `--stream` 对本次进程启用，也可用 `--no-stream` 覆盖环境配置。
 
-`TESTCODE_MODE` 可选值为 `readonly`、`confirm`、`auto`。MCP 的敏感值应通过系统环境变量提供，例如 `AMAP_MCP_KEY`。
+`SAIWORKS_MODE` 可选值为 `readonly`、`confirm`、`auto`。MCP 的敏感值应通过系统环境变量提供，例如 `AMAP_MCP_KEY`。
 
 ## MCP server 字段
 
@@ -146,13 +146,13 @@ TESTCODE_MODE=confirm
 每个 server 还支持以下环境变量覆盖，其中 `<NAME>` 是 server name 转成大写并将非字母数字字符替换为下划线：
 
 ```text
-TESTCODE_MCP_<NAME>_TRANSPORT
-TESTCODE_MCP_<NAME>_TOOL_NAME_PREFIX
-TESTCODE_MCP_<NAME>_COMMAND
-TESTCODE_MCP_<NAME>_URL
-TESTCODE_MCP_<NAME>_TIMEOUT
-TESTCODE_MCP_<NAME>_READ_TIMEOUT
-TESTCODE_MCP_<NAME>_ENABLED
+SAIWORKS_MCP_<NAME>_TRANSPORT
+SAIWORKS_MCP_<NAME>_TOOL_NAME_PREFIX
+SAIWORKS_MCP_<NAME>_COMMAND
+SAIWORKS_MCP_<NAME>_URL
+SAIWORKS_MCP_<NAME>_TIMEOUT
+SAIWORKS_MCP_<NAME>_READ_TIMEOUT
+SAIWORKS_MCP_<NAME>_ENABLED
 ```
 
 headers、env、args 和 `risk_overrides` 不提供同名环境变量整体覆盖；其中的字符串值可以使用 `${VAR}` 展开敏感信息。

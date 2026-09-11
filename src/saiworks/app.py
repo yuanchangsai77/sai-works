@@ -116,8 +116,8 @@ def create_app(
 
     # Resolve skill registry directories
     builtins_dir = Path(__file__).parent / "skills" / "builtins"
-    global_dir = Path.home() / ".testcode" / "skills"
-    project_dir = root / ".testcode" / "skills"
+    global_dir = Path.home() / ".saiworks" / "skills"
+    project_dir = root / ".saiworks" / "skills"
 
     skills_registry = SkillRegistry(
         builtins_dir=builtins_dir,
@@ -171,7 +171,7 @@ def create_app(
         mcp_discovery = MCPDiscoveryService(
             manager=mcp_manager,
             logger=logger,
-            cache_path=root / ".testcode" / "mcp-discovery-cache.json",
+            cache_path=root / ".saiworks" / "mcp-discovery-cache.json",
             max_tools_per_server=config.limits.mcp_tools_per_server,
         )
         capability_sources.append(
@@ -268,11 +268,11 @@ def create_app(
 
 def main() -> None:
     try:
-        parser = argparse.ArgumentParser(description="AgentForge: LLM-driven CLI workbench scaffold")
+        parser = argparse.ArgumentParser(description="SaiWorks: LLM-driven CLI workbench scaffold")
         parser.add_argument(
             "--version",
             action="version",
-            version=f"AgentForge {__version__}",
+            version=f"SaiWorks {__version__}",
         )
         parser.add_argument("prompt", nargs="*", help="Task to send into the CLI workbench")
         parser.add_argument(
@@ -298,7 +298,7 @@ def main() -> None:
         parser.add_argument(
             "--mode",
             choices=["readonly", "confirm", "auto"],
-            default=os.getenv("TESTCODE_MODE", "confirm").strip() or "confirm",
+            default=os.getenv("SAIWORKS_MODE", "confirm").strip() or "confirm",
             help="Safety mode for tool execution.",
         )
         parser.add_argument(
@@ -362,7 +362,7 @@ def main() -> None:
                 resumed_session = app.load_session(session_id) or resumed_session
 
         if args.once:
-            prompt = initial_prompt or input("AgentForge> ").strip()
+            prompt = initial_prompt or input("SaiWorks> ").strip()
             if not prompt:
                 return
             session_store = getattr(app, "session_store", None)

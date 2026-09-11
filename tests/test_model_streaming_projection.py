@@ -1,4 +1,4 @@
-from testcode.model.streaming import NaturalLanguageStreamProjector
+from saiworks.model.streaming import NaturalLanguageStreamProjector
 
 
 def test_projector_streams_only_top_level_natural_language_fields():

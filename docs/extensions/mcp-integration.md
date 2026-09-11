@@ -4,7 +4,7 @@
 
 本文档只负责 MCP 专项设计，重点回答：
 
-- MCP 在 `AgentForge` 中通过哪些模块接入
+- MCP 在 `SaiWorks` 中通过哪些模块接入
 - discovery、transport、client、manager、adapter、provider 如何分层
 - MCP tool 和 resource 如何复用现有 runtime 的 policy、approval、logger、prompt discipline
 
@@ -15,7 +15,7 @@
 - roadmap 优先级与阶段目标看 `docs/roadmap.md`
 - tool 字段放置规则看 `docs/reference/tool-contract.md`
 
-本文档定义 `AgentForge` 中 MCP 接入的当前契约、模块拆分和运行时职责。重点不是“把外部
+本文档定义 `SaiWorks` 中 MCP 接入的当前契约、模块拆分和运行时职责。重点不是“把外部
 tool 接进来能跑”，而是让 MCP 稳定复用现有 runtime 的 tool、policy、logger、
 session 和 prompt 约束。未完成事项只在“当前实现边界”中列出，优先级由总路线图维护。
 
@@ -24,7 +24,7 @@ MCP server 在能力可见性上应被视为工具箱：默认只在能力仓库
 当前仓库实现状态：
 
 - 已有 `ToolProvider`，并已补齐 `ResourceProvider` 扩展面。
-- 已补齐 `src/testcode/mcp/` 模块骨架，包括 `config`、`types`、`client`、`manager`、`discovery`、`adapter`、`provider`。
+- 已补齐 `src/saiworks/mcp/` 模块骨架，包括 `config`、`types`、`client`、`manager`、`discovery`、`adapter`、`provider`。
 - `app.py` 已将 MCP server 装配为能力仓库中的 `MCPToolboxSource`；MCP 叶子工具只在打开 manifest 并显式激活后注册。resource provider 与 manager 仍纳入统一生命周期清理。
 - 已实现 `stdio`、`streamable_http` 与 `sse` 的最小可用 transport 和 client 协议调用主链路。
 - 已实现内存与磁盘 discovery cache、一次性失效重连、MCP 专项事件、基础 capability traits 和未知工具默认确认。
@@ -55,9 +55,9 @@ MCP 接入应满足以下目标：
 
 - `CapabilityWarehouse` 与 `MCPToolboxSource` 负责外层目录、按需 manifest 和叶子激活；`ToolProvider` 保留为通用扩展接口，不再承担启动时注册全部 MCP 工具的职责。
 - `ResourceProvider` 应作为并列扩展面承载 MCP resource index 和按需读取，而不是塞进 tool provider 或 prompt builder。
-- `ToolRegistry` 负责注册、schema 校验、执行和结果记录，定义在 `src/testcode/tools/registry.py`。
-- `DefaultPolicy` 负责按 `risk_level` 决定允许、确认或阻断，定义在 `src/testcode/safety/policy.py`。
-- `OpenAICompatibleModelClient` 只依赖 `session.available_tools` 生成 native tool schema，不区分工具来源，定义在 `src/testcode/model/client.py`。
+- `ToolRegistry` 负责注册、schema 校验、执行和结果记录，定义在 `src/saiworks/tools/registry.py`。
+- `DefaultPolicy` 负责按 `risk_level` 决定允许、确认或阻断，定义在 `src/saiworks/safety/policy.py`。
+- `OpenAICompatibleModelClient` 只依赖 `session.available_tools` 生成 native tool schema，不区分工具来源，定义在 `src/saiworks/model/client.py`。
 - `app.py` 是 runtime composition root，适合装配多个 provider。
 
 因此，MCP 以“capability source + discovery service + resource provider + manager/client/transport + adapter”的形式接入。engine 只负责在下一模型回合刷新统一工具定义，不感知 MCP transport 细节。
@@ -79,7 +79,7 @@ MCP 协议交互负责：
 - `resources/list`
 - `resources/read`
 
-`AgentForge` runtime 负责：
+`SaiWorks` runtime 负责：
 
 - tool 注册
 - risk/policy
@@ -134,7 +134,7 @@ MCP 协议交互负责：
 当前模块层次如下：
 
 ```text
-src/testcode/mcp/
+src/saiworks/mcp/
   __init__.py
   config.py        MCP server 配置模型与加载
   types.py         server/tool/resource 的内部类型
@@ -142,10 +142,10 @@ src/testcode/mcp/
   client.py        单 server MCP client，负责协议调用
   manager.py       多 server 生命周期管理、缓存和关闭
   discovery.py     tool/resource descriptor 的懒发现、缓存与刷新策略
-  adapter.py       MCP schema -> AgentForge Tool / Resource adapter
+  adapter.py       MCP schema -> SaiWorks Tool / Resource adapter
   provider.py      MCPResourceProvider 与兼容性 MCPToolProvider/状态接口
 
-src/testcode/capabilities/
+src/saiworks/capabilities/
   mcp_source.py    MCP 工具箱目录、manifest 与叶子激活入口
 ```
 
@@ -184,7 +184,7 @@ src/testcode/capabilities/
 
 在当前实现里，工具可见性采用能力仓库主链路：
 
-1. `load_runtime_config()` 读取 `.testcode/config.toml` 中的 `[[mcp.servers]]`。
+1. `load_runtime_config()` 读取 `.saiworks/config.toml` 中的 `[[mcp.servers]]`。
 2. `app.py` 创建 `MCPManager`、`MCPDiscoveryService` 和 `MCPToolboxSource`，外层目录仅使用配置中的用途描述和能力标签，不连接远端。
 3. 模型打开选中的 MCP 工具箱时，discovery 才按需读取 descriptor snapshot 或刷新远端 manifest。
 4. 模型激活少量叶子能力后，adapter 生成内部 `Tool`，仓库完成预算与名称冲突校验，并在下一模型回合把工具 schema 暴露给模型。
@@ -243,8 +243,8 @@ MCP 必须只在 application composition root 装配，不允许由 engine 内�
 
 建议与 roadmap 保持一致：
 
-- 全局配置：`~/.testcode/config.toml`
-- 项目配置：`.testcode/config.toml`
+- 全局配置：`~/.saiworks/config.toml`
+- 项目配置：`.saiworks/config.toml`
 - 环境变量作为补充覆盖
 - CLI 参数保留最高优先级
 

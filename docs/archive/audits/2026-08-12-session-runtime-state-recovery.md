@@ -43,8 +43,8 @@
 
 1. 多次读取 workspace 和示例项目。
 2. 创建 `workspaces/study-abroad/docs`、`src` 和 `tests`。
-3. 执行 `cd /home/changsai/testcode/workspaces/study-abroad`。
-4. 创建 `docs/architecture`、`docs/design`、`src/testcode` 等子目录。
+3. 执行 `cd /home/changsai/SaiWorks/workspaces/study-abroad`。
+4. 创建 `docs/architecture`、`docs/design`、`src/saiworks` 等子目录。
 
 之后模型服务发生连续超时。该运行共有：
 
@@ -75,8 +75,8 @@ session trace 中显示没有工具，尽管工作区和 Shell 都已经发生�
 - 尚未生成任何文件这一完成差距。
 
 因此恢复后的模型重新开始检查目录。结构化工具仍以请求工作区
-`/home/changsai/testcode` 为路径基准，而 Shell 已位于
-`/home/changsai/testcode/workspaces/study-abroad`。同一个相对路径在两类工具中被解释成不同位置，产生
+`/home/changsai/SaiWorks` 为路径基准，而 Shell 已位于
+`/home/changsai/SaiWorks/workspaces/study-abroad`。同一个相对路径在两类工具中被解释成不同位置，产生
 “目录存在”和“目录不存在”两组表面冲突的证据。
 
 ### 2.3 恢复运行没有形成有效收敛

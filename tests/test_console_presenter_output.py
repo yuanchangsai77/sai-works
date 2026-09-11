@@ -2,9 +2,9 @@ import os
 import re
 from types import SimpleNamespace
 
-from testcode.interaction.presenter import ConsolePresenter
-from testcode.interaction.terminal import Spinner, colored_border
-from testcode.types import ExecutionSummary, SessionResumeState, ToolAction, ToolResult
+from saiworks.interaction.presenter import ConsolePresenter
+from saiworks.interaction.terminal import Spinner, colored_border
+from saiworks.types import ExecutionSummary, SessionResumeState, ToolAction, ToolResult
 
 
 def test_presenter_cleans_protocol_tags_only_for_display(capsys):
@@ -131,7 +131,7 @@ def test_input_border_preserves_ansi_reset_in_narrow_terminal(monkeypatch, capsy
 
 
 def test_full_width_tty_border_suppresses_pending_autowrap(monkeypatch):
-    monkeypatch.setattr("testcode.interaction.terminal.sys.stdout.isatty", lambda: True)
+    monkeypatch.setattr("saiworks.interaction.terminal.sys.stdout.isatty", lambda: True)
 
     border = colored_border(4)
 
@@ -150,9 +150,9 @@ def test_resize_preserves_prompt_and_refreshes_only_the_chrome(monkeypatch, caps
 
     output = capsys.readouterr().out
     assert output.startswith("\r\033[3A\r\033[J")
-    assert "AgentForge>" in output
+    assert "SaiWorks>" in output
     assert output.count("────────────────────") == 2
-    assert output.endswith("\r\033[2A\033[6C")
+    assert output.endswith("\r\033[2A\033[4C")
 
 
 def test_resize_erases_all_reflowed_top_border_rows(monkeypatch, capsys):
@@ -168,8 +168,8 @@ def test_resize_erases_all_reflowed_top_border_rows(monkeypatch, capsys):
     output = capsys.readouterr().out
     assert output.startswith("\r\033[5A\r\033[J")
     assert output.count("────────────────────") == 2
-    assert "AgentForge>" in output
-    assert output.endswith("\r\033[2A\033[13C")
+    assert "SaiWorks>" in output
+    assert output.endswith("\r\033[2A\033[11C")
 
 
 def test_growing_frame_stays_attached_to_transcript(monkeypatch, capsys):
@@ -193,11 +193,11 @@ def test_submitted_input_keeps_both_history_borders(monkeypatch, capsys):
 
     output = capsys.readouterr().out
     assert output.count("────────────────────") == 2
-    assert "AgentForge>" in output
+    assert "SaiWorks>" in output
 
 
 def test_show_session_state(capsys):
-    from testcode.types import StoredSession
+    from saiworks.types import StoredSession
     presenter = ConsolePresenter()
     session = StoredSession(
         session_id="test-session-123",
@@ -346,7 +346,7 @@ def test_show_capabilities_formats_manifest_status_and_result(capsys):
 
 
 def test_show_tool_start_and_end(capsys):
-    from testcode.types import ToolAction, ToolResult
+    from saiworks.types import ToolAction, ToolResult
     presenter = ConsolePresenter()
     action = ToolAction(name="test_tool", arguments={"a": 1, "b": "hello world"})
     result = ToolResult(name="test_tool", success=True, output="tool output")
@@ -422,7 +422,7 @@ def test_presenter_prompt_input(monkeypatch, capsys):
     assert val == "hello test"
     
     output = capsys.readouterr().out
-    assert "AgentForge>" in output
+    assert "SaiWorks>" in output
     assert "shortcuts" in output
     assert "StubModel" in output
 
@@ -451,10 +451,10 @@ def test_interactive_selection_uses_arrow_keys_and_enter(monkeypatch, capsys):
     keys = iter(("\x1b[B", "\r"))
 
     monkeypatch.setattr(presenter.prompt_box, "_read_key", lambda _fd: next(keys))
-    monkeypatch.setattr("testcode.interaction.input.sys.stdin.fileno", lambda: 0)
-    monkeypatch.setattr("testcode.interaction.input.termios.tcgetattr", lambda _fd: [])
-    monkeypatch.setattr("testcode.interaction.input.termios.tcsetattr", lambda *_args: None)
-    monkeypatch.setattr("testcode.interaction.input.tty.setcbreak", lambda _fd: None)
+    monkeypatch.setattr("saiworks.interaction.input.sys.stdin.fileno", lambda: 0)
+    monkeypatch.setattr("saiworks.interaction.input.termios.tcgetattr", lambda _fd: [])
+    monkeypatch.setattr("saiworks.interaction.input.termios.tcsetattr", lambda *_args: None)
+    monkeypatch.setattr("saiworks.interaction.input.tty.setcbreak", lambda _fd: None)
 
     choice = presenter.prompt_box._read_interactive_selection(("Yes", "No"))
 
@@ -468,10 +468,10 @@ def test_interactive_selection_accepts_number_keys(monkeypatch):
     presenter = ConsolePresenter()
 
     monkeypatch.setattr(presenter.prompt_box, "_read_key", lambda _fd: "2")
-    monkeypatch.setattr("testcode.interaction.input.sys.stdin.fileno", lambda: 0)
-    monkeypatch.setattr("testcode.interaction.input.termios.tcgetattr", lambda _fd: [])
-    monkeypatch.setattr("testcode.interaction.input.termios.tcsetattr", lambda *_args: None)
-    monkeypatch.setattr("testcode.interaction.input.tty.setcbreak", lambda _fd: None)
+    monkeypatch.setattr("saiworks.interaction.input.sys.stdin.fileno", lambda: 0)
+    monkeypatch.setattr("saiworks.interaction.input.termios.tcgetattr", lambda _fd: [])
+    monkeypatch.setattr("saiworks.interaction.input.termios.tcsetattr", lambda *_args: None)
+    monkeypatch.setattr("saiworks.interaction.input.tty.setcbreak", lambda _fd: None)
 
     assert presenter.prompt_box._read_interactive_selection(("Yes", "No")) == "2"
 
@@ -481,13 +481,13 @@ def test_read_key_waits_for_complete_arrow_sequence(monkeypatch):
     bytes_to_read = iter((b"\x1b", b"[", b"B"))
     timeouts = []
 
-    monkeypatch.setattr("testcode.interaction.input.os.read", lambda _fd, _size: next(bytes_to_read))
+    monkeypatch.setattr("saiworks.interaction.input.os.read", lambda _fd, _size: next(bytes_to_read))
 
     def readable(_read, _write, _errors, timeout):
         timeouts.append(timeout)
         return ([0], [], [])
 
-    monkeypatch.setattr("testcode.interaction.input.select.select", readable)
+    monkeypatch.setattr("saiworks.interaction.input.select.select", readable)
 
     assert presenter.prompt_box._read_key(0) == "\x1b[B"
     assert timeouts == [0.5, 0.5]
@@ -545,7 +545,7 @@ def test_spinner_escape_listener_interrupts_on_escape(monkeypatch):
 
     monkeypatch.setattr(spinner, "_read_key", lambda _fd: "\x1b")
     monkeypatch.setattr(spinner, "_signal_interrupt", lambda: interrupted.append(True))
-    monkeypatch.setattr("testcode.interaction.terminal.select.select", lambda *_args: ([0], [], []))
+    monkeypatch.setattr("saiworks.interaction.terminal.select.select", lambda *_args: ([0], [], []))
 
     spinner._watch_for_escape()
 
@@ -563,7 +563,7 @@ def test_spinner_escape_listener_ignores_arrow_sequence(monkeypatch):
 
     monkeypatch.setattr(spinner, "_read_key", arrow_then_stop)
     monkeypatch.setattr(spinner, "_signal_interrupt", lambda: interrupted.append(True))
-    monkeypatch.setattr("testcode.interaction.terminal.select.select", lambda *_args: ([0], [], []))
+    monkeypatch.setattr("saiworks.interaction.terminal.select.select", lambda *_args: ([0], [], []))
 
     spinner._watch_for_escape()
 

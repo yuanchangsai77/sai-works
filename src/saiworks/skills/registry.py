@@ -32,12 +32,12 @@ class SkillRegistry:
                 dirs_to_scan.append(p_dir)
             elif len(dirs_to_scan) == 1:
                 # We also need a dummy/placeholder for global_dir
-                dirs_to_scan.append(Path("~/.testcode/skills").expanduser())
+                dirs_to_scan.append(Path("~/.saiworks/skills").expanduser())
                 dirs_to_scan.append(p_dir)
             else:
                 # If it was empty
                 dirs_to_scan.append(Path("").resolve()) # builtins dummy
-                dirs_to_scan.append(Path("~/.testcode/skills").expanduser())
+                dirs_to_scan.append(Path("~/.saiworks/skills").expanduser())
                 dirs_to_scan.append(p_dir)
 
         for d in dirs_to_scan:

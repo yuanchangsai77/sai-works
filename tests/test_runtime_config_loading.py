@@ -1,9 +1,9 @@
 import pytest
 
-from testcode.config import MAX_MODEL_RETRIES, MAX_TOOL_RESULTS, load_dotenv, load_runtime_config
-from testcode.mcp.adapter import build_stable_tool_name, map_mcp_tool_risk
-from testcode.mcp.config import MCPServerConfig
-from testcode.mcp.types import MCPToolDescriptor
+from saiworks.config import MAX_MODEL_RETRIES, MAX_TOOL_RESULTS, load_dotenv, load_runtime_config
+from saiworks.mcp.adapter import build_stable_tool_name, map_mcp_tool_risk
+from saiworks.mcp.config import MCPServerConfig
+from saiworks.mcp.types import MCPToolDescriptor
 
 
 def test_load_dotenv_reads_values_without_overwriting_existing_env(tmp_path, monkeypatch):
@@ -11,17 +11,17 @@ def test_load_dotenv_reads_values_without_overwriting_existing_env(tmp_path, mon
     env_path.write_text(
         """
 # ignored
-TESTCODE_MODEL_BASE_URL=http://127.0.0.1:3000
-TESTCODE_MODEL_NAME="quoted-model"
-TESTCODE_MODE=auto
+SAIWORKS_MODEL_BASE_URL=http://127.0.0.1:3000
+SAIWORKS_MODEL_NAME="quoted-model"
+SAIWORKS_MODE=auto
 EXISTING=from-file
 MALFORMED
         """.strip(),
         encoding="utf-8",
     )
-    monkeypatch.delenv("TESTCODE_MODEL_BASE_URL", raising=False)
-    monkeypatch.delenv("TESTCODE_MODEL_NAME", raising=False)
-    monkeypatch.delenv("TESTCODE_MODE", raising=False)
+    monkeypatch.delenv("SAIWORKS_MODEL_BASE_URL", raising=False)
+    monkeypatch.delenv("SAIWORKS_MODEL_NAME", raising=False)
+    monkeypatch.delenv("SAIWORKS_MODE", raising=False)
     monkeypatch.setenv("EXISTING", "from-env")
 
     load_dotenv(env_path)
@@ -36,11 +36,11 @@ MALFORMED
 
 
 def test_load_runtime_config_defaults_and_timeout_fallbacks(monkeypatch):
-    monkeypatch.delenv("TESTCODE_MODEL_BASE_URL", raising=False)
-    monkeypatch.delenv("TESTCODE_MODEL_STREAM_MAX_SECONDS", raising=False)
-    monkeypatch.setenv("TESTCODE_MODEL_NAME", " ")
-    monkeypatch.setenv("TESTCODE_MODEL_TIMEOUT", "not-a-number")
-    monkeypatch.setenv("TESTCODE_MODE", "")
+    monkeypatch.delenv("SAIWORKS_MODEL_BASE_URL", raising=False)
+    monkeypatch.delenv("SAIWORKS_MODEL_STREAM_MAX_SECONDS", raising=False)
+    monkeypatch.setenv("SAIWORKS_MODEL_NAME", " ")
+    monkeypatch.setenv("SAIWORKS_MODEL_TIMEOUT", "not-a-number")
+    monkeypatch.setenv("SAIWORKS_MODE", "")
 
     config = load_runtime_config()
 
@@ -51,31 +51,31 @@ def test_load_runtime_config_defaults_and_timeout_fallbacks(monkeypatch):
     assert config.mode == "confirm"
     assert config.orchestration.subagent_model_timeout == 120.0
 
-    monkeypatch.setenv("TESTCODE_MODEL_TIMEOUT", "-1")
+    monkeypatch.setenv("SAIWORKS_MODEL_TIMEOUT", "-1")
     assert load_runtime_config().model_timeout == 60.0
 
-    monkeypatch.setenv("TESTCODE_MODEL_TIMEOUT", "2.5")
+    monkeypatch.setenv("SAIWORKS_MODEL_TIMEOUT", "2.5")
     assert load_runtime_config().model_timeout == 2.5
 
-    monkeypatch.setenv("TESTCODE_MODEL_STREAM_MAX_SECONDS", "1200")
+    monkeypatch.setenv("SAIWORKS_MODEL_STREAM_MAX_SECONDS", "1200")
     assert load_runtime_config().model_stream_max_seconds == 1200.0
 
 
 def test_load_runtime_config_parses_optional_model_stream(monkeypatch):
-    monkeypatch.delenv("TESTCODE_MODEL_STREAM", raising=False)
+    monkeypatch.delenv("SAIWORKS_MODEL_STREAM", raising=False)
     assert load_runtime_config().model_stream is False
 
-    monkeypatch.setenv("TESTCODE_MODEL_STREAM", "true")
+    monkeypatch.setenv("SAIWORKS_MODEL_STREAM", "true")
     assert load_runtime_config().model_stream is True
 
-    monkeypatch.setenv("TESTCODE_MODEL_STREAM", "invalid")
+    monkeypatch.setenv("SAIWORKS_MODEL_STREAM", "invalid")
     assert load_runtime_config().model_stream is False
 
 
 def test_load_runtime_config_parses_project_mcp_servers(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GITHUB_TOKEN", "secret-token")
-    config_dir = tmp_path / ".testcode"
+    config_dir = tmp_path / ".saiworks"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
         """
@@ -111,7 +111,7 @@ create_issue = "write"
 
 def test_load_runtime_config_rejects_duplicate_mcp_server_names(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    config_dir = tmp_path / ".testcode"
+    config_dir = tmp_path / ".saiworks"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
         """
@@ -135,9 +135,9 @@ command = "second"
 def test_load_runtime_config_reads_tuning_and_project_values_override_global(tmp_path, monkeypatch):
     global_dir = tmp_path / "global"
     project_dir = tmp_path / "project"
-    (global_dir / ".testcode").mkdir(parents=True)
-    (project_dir / ".testcode").mkdir(parents=True)
-    (global_dir / ".testcode" / "config.toml").write_text(
+    (global_dir / ".saiworks").mkdir(parents=True)
+    (project_dir / ".saiworks").mkdir(parents=True)
+    (global_dir / ".saiworks" / "config.toml").write_text(
         """
 [model.retry]
 max_retries = 2
@@ -147,7 +147,7 @@ delays = [0.1]
 search_results = 100
         """.strip(), encoding="utf-8"
     )
-    (project_dir / ".testcode" / "config.toml").write_text(
+    (project_dir / ".saiworks" / "config.toml").write_text(
         """
 [model.retry]
 max_retries = 4
@@ -166,7 +166,7 @@ search_results = 300
 prompt_context_chars = 24000
         """.strip(), encoding="utf-8"
     )
-    monkeypatch.setattr("testcode.config.Path.home", lambda: global_dir)
+    monkeypatch.setattr("saiworks.config.Path.home", lambda: global_dir)
 
     config = load_runtime_config(cwd=project_dir)
 
@@ -191,10 +191,10 @@ prompt_context_chars = 24000
     ],
 )
 def test_load_runtime_config_rejects_values_above_hard_limit(tmp_path, monkeypatch, table, message):
-    config_dir = tmp_path / ".testcode"
+    config_dir = tmp_path / ".saiworks"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(table, encoding="utf-8")
-    monkeypatch.setattr("testcode.config.Path.home", lambda: tmp_path / "empty")
+    monkeypatch.setattr("saiworks.config.Path.home", lambda: tmp_path / "empty")
 
     with pytest.raises(ValueError, match=message):
         load_runtime_config(cwd=tmp_path)
@@ -225,7 +225,7 @@ def test_mcp_adapter_helpers_apply_stable_names_and_risk_overrides():
 
 def test_mcp_environment_overrides_project_server_fields(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
-    config_dir = tmp_path / ".testcode"
+    config_dir = tmp_path / ".saiworks"
     config_dir.mkdir()
     (config_dir / "config.toml").write_text(
         """
@@ -237,9 +237,9 @@ timeout = 10
         """.strip(),
         encoding="utf-8",
     )
-    monkeypatch.setenv("TESTCODE_MCP_REMOTE_API_URL", "https://env.example/mcp")
-    monkeypatch.setenv("TESTCODE_MCP_REMOTE_API_TIMEOUT", "25")
-    monkeypatch.setenv("TESTCODE_MCP_REMOTE_API_ENABLED", "false")
+    monkeypatch.setenv("SAIWORKS_MCP_REMOTE_API_URL", "https://env.example/mcp")
+    monkeypatch.setenv("SAIWORKS_MCP_REMOTE_API_TIMEOUT", "25")
+    monkeypatch.setenv("SAIWORKS_MCP_REMOTE_API_ENABLED", "false")
 
     server = load_runtime_config().mcp_servers[0]
 
@@ -257,7 +257,7 @@ timeout = 10
     ],
 )
 def test_mcp_config_rejects_invalid_field_types(field, value, message):
-    from testcode.mcp.config import _build_server_config
+    from saiworks.mcp.config import _build_server_config
 
     raw = {"name": "strict", "transport": "stdio", "command": "server", field: value}
 

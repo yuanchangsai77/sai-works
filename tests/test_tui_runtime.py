@@ -11,7 +11,7 @@ import time
 
 import pytest
 
-from testcode.interaction.tui import (
+from saiworks.interaction.tui import (
     ComposerState,
     InlineTerminalSurface,
     TUIConsolePresenter,
@@ -19,9 +19,9 @@ from testcode.interaction.tui import (
     TUIRenderer,
     _display_width,
 )
-from testcode.interaction.tui_events import TUIEvent, TUIEventKind, TUIEventQueue
-from testcode.interaction.tui_state import RunStatus, ToolStatus
-from testcode.types import ExecutionSummary
+from saiworks.interaction.tui_events import TUIEvent, TUIEventKind, TUIEventQueue
+from saiworks.interaction.tui_state import RunStatus, ToolStatus
+from saiworks.types import ExecutionSummary
 
 
 def _plain(value: str) -> str:
@@ -300,7 +300,7 @@ def test_first_answer_reuses_prompt_separator_without_adding_a_second_blank_line
     )
 
     lines = _plain(output.getvalue()).splitlines()
-    prompt_line = next(index for index, line in enumerate(lines) if "AgentForge> 您好" in line)
+    prompt_line = next(index for index, line in enumerate(lines) if "SaiWorks> 您好" in line)
     answer_line = next(
         index for index, line in enumerate(lines) if "您好！请问有什么可以帮您的吗？" in line
     )
@@ -450,8 +450,8 @@ def test_inline_surface_redraws_only_transient_tail_without_alternate_screen_or_
     output = StringIO()
     surface = InlineTerminalSurface(output)
 
-    surface.render(["working", "testcode> hello", "model"], cursor_row=1, cursor_column=12)
-    surface.render(["done", "testcode> hello", "model"], cursor_row=1, cursor_column=12)
+    surface.render(["working", "saiworks> hello", "model"], cursor_row=1, cursor_column=12)
+    surface.render(["done", "saiworks> hello", "model"], cursor_row=1, cursor_column=12)
     surface.clear()
 
     rendered = output.getvalue()
@@ -464,7 +464,7 @@ def test_inline_surface_redraws_only_transient_tail_without_alternate_screen_or_
 def test_inline_surface_accounts_for_old_frame_reflow_when_clearing(monkeypatch):
     output = StringIO()
     monkeypatch.setattr(
-        "testcode.interaction.tui._terminal_size",
+        "saiworks.interaction.tui._terminal_size",
         lambda output=None: os.terminal_size((10, 18)),
     )
     surface = InlineTerminalSurface(output)
@@ -482,7 +482,7 @@ def test_prompt_input_reads_utf8_without_prompt_toolkit():
     read_fd, write_fd = os.pipe()
     output = StringIO()
     try:
-        os.write(write_fd, "你好，testcode\r".encode())
+        os.write(write_fd, "你好，saiworks\r".encode())
         presenter = TUIConsolePresenter(input=read_fd, output=output)
 
         value = presenter.prompt_input()
@@ -490,7 +490,7 @@ def test_prompt_input_reads_utf8_without_prompt_toolkit():
         os.close(read_fd)
         os.close(write_fd)
 
-    assert value == "你好，testcode"
+    assert value == "你好，saiworks"
     assert "\x1b[?1049h" not in output.getvalue()
 
 
@@ -502,7 +502,7 @@ def test_committed_output_is_written_once_to_native_scrollback():
     presenter._print("answer")
 
     plain = _plain(output.getvalue())
-    assert plain.count("AgentForge> inspect") == 1
+    assert plain.count("SaiWorks> inspect") == 1
     assert plain.count("answer") == 1
 
 
@@ -511,7 +511,7 @@ def test_worked_separator_has_a_blank_line_below(monkeypatch):
     presenter = TUIConsolePresenter(output=output)
     presenter._pending_worked_seconds = 220
     monkeypatch.setattr(
-        "testcode.interaction.tui._terminal_size",
+        "saiworks.interaction.tui._terminal_size",
         lambda output=None: os.terminal_size((60, 20)),
     )
 
@@ -532,14 +532,14 @@ def test_runtime_frame_places_model_below_composer(monkeypatch):
         )
     )
     monkeypatch.setattr(
-        "testcode.interaction.tui._terminal_size",
+        "saiworks.interaction.tui._terminal_size",
         lambda output=None: os.terminal_size((80, 24)),
     )
 
     presenter._render_runtime()
 
     plain = _plain(output.getvalue())
-    assert plain.index("AgentForge>") < plain.index("gpt-5 · /repo")
+    assert plain.index("SaiWorks>") < plain.index("gpt-5 · /repo")
 
 
 def test_runtime_thinking_has_plain_blank_rows_above_and_below():
@@ -562,7 +562,7 @@ def test_prompt_text_reapplies_gray_background_after_colored_label():
 
     rows, _cursor_row, _cursor_column = presenter._composer_rows(80)
 
-    assert "AgentForge> \033[0m\033[48;5;236mhello" in rows[0]
+    assert "SaiWorks> \033[0m\033[48;5;236mhello" in rows[0]
     assert "hello\033[K\033[0m" in rows[0]
 
 
@@ -583,7 +583,7 @@ def test_runtime_submission_interrupts_and_queues_next_prompt(monkeypatch):
     presenter._composer.set_value("change direction")
     signals = []
     monkeypatch.setattr(
-        "testcode.interaction.tui.os.kill",
+        "saiworks.interaction.tui.os.kill",
         lambda process_id, sent_signal: signals.append((process_id, sent_signal)),
     )
 
@@ -685,7 +685,7 @@ def test_composer_rows_scrolled_multiline_does_not_repeat_prompt_prefix():
 
     assert len(plain_rows) == 6
     assert plain_rows[0].startswith("  ")
-    assert "AgentForge>" not in plain_rows[0]
+    assert "SaiWorks>" not in plain_rows[0]
     assert all(len(row) < 80 for row in plain_rows)
 
 
@@ -744,7 +744,7 @@ def test_completion_rows_never_wrap_long_capability_descriptions(monkeypatch, co
     presenter = TUIConsolePresenter(output=StringIO())
     presenter._composer.set_value("/capabilities activate ")
     monkeypatch.setattr(
-        "testcode.interaction.tui._terminal_size",
+        "saiworks.interaction.tui._terminal_size",
         lambda _output=None: os.terminal_size((columns, 24)),
     )
     matches = [
@@ -767,9 +767,9 @@ def test_completion_rows_never_wrap_long_capability_descriptions(monkeypatch, co
 
 
 def test_composer_offers_dynamic_second_level_command_options(tmp_path, monkeypatch):
-    from testcode.app import create_app
+    from saiworks.app import create_app
 
-    monkeypatch.setenv("TESTCODE_MODEL_BASE_URL", "")
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     app = create_app(workspace_root=tmp_path)
     first_session = app.session_store.create(cwd=str(tmp_path), messages=[{"role": "user", "content": "first task"}])
     composer = ComposerState(

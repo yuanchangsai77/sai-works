@@ -51,7 +51,7 @@ Node.js 只有在 `package.json` 中存在有效的 `scripts.test` 时才提供�
 Python 环境按以下顺序选择：
 
 1. 项目中的 `.venv` 或 `venv` 可执行解释器。
-2. 当前 AgentForge 进程的 Python 解释器。
+2. 当前 SaiWorks 进程的 Python 解释器。
 
 检测到明确的 Python `src` layout 时，解析器为测试命令设置受控的相对
 `PYTHONPATH=src`。结果 metadata 会记录命令来源、环境来源、项目根目录、耗时和是否
@@ -61,7 +61,7 @@ Python 环境按以下顺序选择：
 
 - 不自动创建、安装或激活虚拟环境。
 - 不在多个候选之间猜测。
-- 不把任意目标 workspace 的 `.env` 当作 AgentForge 模型配置加载。
+- 不把任意目标 workspace 的 `.env` 当作 SaiWorks 模型配置加载。
 - 自动命令仍属于 `test` 风险，必须遵守当前安全模式和审批规则。
 - 项目规则与显式上下文有独立大小和数量限制；当前尚未经过统一 token 预算打包。
 - workspace summary 是模型上下文，不是构建系统或项目配置的替代品。
