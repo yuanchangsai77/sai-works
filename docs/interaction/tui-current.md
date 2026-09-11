@@ -43,6 +43,8 @@
 同一边界判断也用于动态流式预览：预览出现时就补足缺少的空行，完整数据到达后切换为 Markdown 稳定
 渲染时保持相同间距，不发生先贴住上一项、结束后再跳开的问题。
 
+![稳定 Markdown 回答](../assets/saiworks-rendered-response.png)
+
 工具执行遵循相同的瞬态/稳定边界：运行中的工具只显示在可清除的动态尾部；一旦完成、失败、中止或
 跳过，就立即从动态尾部移除并写入原生 scrollback。每一项完成记录都会随执行进度向上推动已有内容，
 无需等待整轮运行结束。结束阶段的 transcript 刷新只兜底提交尚未稳定写入的异常生命周期记录，并按
@@ -57,9 +59,11 @@
 ### 启动区
 
 ```text
-  _            _                 _
- | |_ ___  ___| |_ ___  ___   __| | ___
- ...
+  ____        _ __        __         _
+ / ___|  __ _(_) \\ \\      / /__  _ __| | _____
+ \\___ \\ / _` | | \\ \\ /\\ / / _ \\| '__| |/ / __|
+  ___) | (_| | |  \\ V  V / (_) | |  |   <\\__ \\
+ |____/ \\__,_|_|   \\_/\\_/ \\___/|_|  |_|\\_\\___/
 ────────────────────────────────────────────────────────
  › Workspace:   /workspace
  › Session:     Started - ...
@@ -127,6 +131,8 @@ Open a toolbox with /capabilities open <toolbox-id>
  ? for shortcuts                                      model
 ```
 
+![斜杠命令自动补全](../assets/saiworks-slash-commands.png)
+
 - **支持的常用指令**：
   - `/help`（或 `?`）：查看帮助与指令列表
   - `/clear`：清空终端屏幕历史（保持上下文记忆）
@@ -191,6 +197,14 @@ Select a session to resume (use ↑/↓ keys, Enter to confirm, Esc to cancel):
 - **高亮展示**：当前记录使用高亮色，其他记录使用弱化颜色。
 - **确认与退出**：按 `Enter` 载入；按 `Esc` 或 `Ctrl+C` 取消并清理选择界面。
 
+![历史会话选择](../assets/saiworks-session-resume-selection.png)
+
+### 会话结束摘要
+
+退出会话后，终端会汇总 token 使用情况，并提供恢复当前或最近会话的命令：
+
+![会话结束摘要](../assets/saiworks-session-close-summary.png)
+
 
 
 
@@ -211,6 +225,14 @@ Select a session to resume (use ↑/↓ keys, Enter to confirm, Esc to cancel):
 Thinking/Working 活动块上下各保留一行终端底色空白。输入提示符和其后的可编辑文本会分别着色，但共享同一层灰色背景；行尾通过当前背景色的 erase-to-end 完成填充，不输出会在 resize 时参与 reflow 的空格。
 
 模型或工具工作时输入器仍然存活。提交非空内容会请求中断当前 run，并把内容排队为下一轮消息；没有提交的草稿会回到下一次空闲输入框。
+
+中断时会保留已经运行的时长，并提示用户可以立即输入下一项任务：
+
+![运行中断状态](../assets/saiworks-interrupted-run.png)
+
+请求重试会在 transcript 中显示当前次数，并保留中断当前 run 的快捷键：
+
+![请求重试状态](../assets/saiworks-request-retry.png)
 
 每轮结束后写入：
 

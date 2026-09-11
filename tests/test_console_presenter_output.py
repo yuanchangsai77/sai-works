@@ -244,6 +244,8 @@ def test_show_session_state(capsys):
 
     output = capsys.readouterr().out
     plain_output = re.sub(r"\x1b\[[0-9;]*m", "", output)
+    assert plain_output.startswith("  ____")
+    assert "\n\n────────────────" not in plain_output
     assert "test-session-123" in output
     assert "/tmp/fake-cwd" in output
     assert "confirm" in output

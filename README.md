@@ -92,14 +92,21 @@ The current implementation supports a structured local tool loop for file
 inspection, search, shell execution, patching, test commands, read-only Git
 inspection, Skill activation, and on-demand MCP tool activation.
 
-Interactive users can inspect the same warehouse with `/capabilities`, or activate one Skill through
-the same path with `/skill <name>`; these commands do not maintain a separate capability state.
-
 Long conversation mode:
 
 ```bash
 PYTHONPATH=src python3 -m saiworks
 ```
+
+启动后会显示当前工作区、会话、安全模式和已加载能力：
+
+![SaiWorks 运行时概览](docs/assets/saiworks-runtime-overview.png)
+
+Interactive users can inspect the same warehouse with `/capabilities`, or activate one Skill through
+the same path with `/skill <name>`; these commands do not maintain a separate capability state.
+能力仓库支持渐进式打开工具箱，在不把全部工具暴露给当前会话的前提下提供需要的能力：
+
+![SaiWorks 能力工具箱选择](docs/assets/saiworks-capability-toolbox-selection.png)
 
 List saved conversations:
 
@@ -231,6 +238,10 @@ Specialized workflow tools are progressively disclosed: `pytest-helper` supplies
 those Skill toolbox leaves when the task needs them; `/skill <name>` activates the complete workflow for
 interactive use. Tool providers remain the implementation owners; Skills group and recommend reusable
 capabilities rather than defining whether a core tool exists.
+
+写入操作会在执行前展示变更摘要并要求显式确认：
+
+![SaiWorks 写入审批](docs/assets/saiworks-write-approval.png)
 
 ### Shell 会话与中断
 
