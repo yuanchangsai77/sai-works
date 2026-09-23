@@ -16,14 +16,8 @@ class ModelPromptBuilder:
             "The surrounding application provides orchestration and tools; it is not your identity or the user's task domain.",
             "Treat the current workspace as optional task context, not as proof that every request is about this repository.",
             "You must decide whether to answer directly or request tool calls.",
-            "Always respond with strict JSON.",
-            "Use exactly this schema:",
-            '{"message":"string","done":true|false,"actions":[{"name":"tool_name","arguments":{"key":"value"}}]}',
+            "The runtime selects exactly one executable action protocol for this run.",
             "Rules:",
-            "- If you need more local context, set done to false and include one or more tool actions.",
-            "- If you can answer the user, set done to true.",
-            "- If native tool calls are available, use the API tool_calls field.",
-            "- If you answer in content, use only the strict JSON schema above for tool actions.",
             "- Never emit XML, HTML, <invoke>, <tool_call>, or <parameter> tags.",
             "- Do not use markdown fences.",
             "- Only use tool names from the provided tool list.",
@@ -78,6 +72,28 @@ class ModelPromptBuilder:
             )
 
         model_profile = session.request.metadata.get("model_capability_profile")
+        action_protocol = (
+            str(model_profile.get("action_protocol", "native_tools"))
+            if isinstance(model_profile, dict)
+            else "native_tools"
+        )
+        system_lines.extend(
+            [
+                f"- Executable action protocol: {action_protocol}",
+                (
+                    "- Use only API tool_calls for actions; never put executable actions in content."
+                    if action_protocol == "native_tools"
+                    else "- Use only the strict JSON content schema for actions; do not emit API tool_calls."
+                ),
+                (
+                    '- Content answers must be JSON with {"message":"string","done":true}. '
+                    "A tool call is the only action channel."
+                    if action_protocol == "native_tools"
+                    else 'Use {"message":"string","done":true|false,"actions":[{"name":"tool_name","arguments":{}}]}. '
+                    "When done=true, actions must be empty."
+                ),
+            ]
+        )
         if isinstance(model_profile, dict):
             system_lines.extend(
                 [

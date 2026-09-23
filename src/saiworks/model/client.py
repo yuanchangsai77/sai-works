@@ -105,6 +105,7 @@ class OpenAICompatibleModelClient:
             {
                 "structured_output_mode": self.capability_profile.structured_output_mode,
                 "native_tool_calls": self.capability_profile.native_tool_calls,
+                "action_protocol": self.capability_profile.action_protocol,
                 "parallel_tool_calls": self.capability_profile.parallel_tool_calls,
                 "context_budget_chars": self.capability_profile.context_budget_chars,
                 "provenance": self.capability_profile.provenance,

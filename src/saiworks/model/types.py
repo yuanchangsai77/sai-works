@@ -41,6 +41,10 @@ class ModelCapabilityProfile:
     model: str
     structured_output_mode: str = "prompt_json"
     native_tool_calls: bool = True
+    # The runtime exposes one executable action channel per run.  Keep this
+    # explicit instead of asking the model to choose between content actions
+    # and API tool calls on every turn.
+    action_protocol: str = "native_tools"
     parallel_tool_calls: bool = False
     context_budget_chars: int = 120_000
     provenance: str = "configured_default"

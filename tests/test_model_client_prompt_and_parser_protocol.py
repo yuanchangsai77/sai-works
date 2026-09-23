@@ -645,6 +645,42 @@ def test_model_client_projects_capability_profile_and_context_stats(monkeypatch)
     assert request_event.payload["context_package"]["budget_chars"] == 4_000
 
 
+def test_prompt_declares_one_executable_action_protocol():
+    native = SessionContext(
+        request=UserRequest(
+            prompt="read README",
+            cwd="/repo",
+            metadata={
+                "model_capability_profile": {
+                    "action_protocol": "native_tools",
+                    "native_tool_calls": True,
+                }
+            },
+        )
+    )
+    native_system = str(ModelPromptBuilder().build_messages(native)[0]["content"])
+    assert "Executable action protocol: native_tools" in native_system
+    assert "Use only API tool_calls for actions" in native_system
+    assert "never put executable actions in content" in native_system
+
+    prompt_json = SessionContext(
+        request=UserRequest(
+            prompt="read README",
+            cwd="/repo",
+            metadata={
+                "model_capability_profile": {
+                    "action_protocol": "prompt_json",
+                    "native_tool_calls": False,
+                }
+            },
+        )
+    )
+    json_system = str(ModelPromptBuilder().build_messages(prompt_json)[0]["content"])
+    assert "Executable action protocol: prompt_json" in json_system
+    assert "Use only the strict JSON content schema for actions" in json_system
+    assert "When done=true, actions must be empty" in json_system
+
+
 def test_build_messages_marks_delegated_subagent_and_prioritizes_current_task():
     session = SessionContext(
         request=UserRequest(
