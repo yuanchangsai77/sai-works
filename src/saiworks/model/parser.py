@@ -12,7 +12,15 @@ class ModelReplyParser:
     def __init__(self, logger=None) -> None:
         self.logger = logger
 
-    def parse_response(self, data: dict[str, object], *, allowed_tool_names: set[str] | None = None) -> ModelReply:
+    def parse_response(
+        self,
+        data: dict[str, object],
+        *,
+        allowed_tool_names: set[str] | None = None,
+        action_protocol: str = "native_tools",
+    ) -> ModelReply:
+        if action_protocol not in {"native_tools", "prompt_json"}:
+            raise RuntimeError(f"Unsupported action protocol: {action_protocol}")
         choices = data.get("choices")
         if not isinstance(choices, list) or not choices:
             raise RuntimeError(f"Model response missing choices: {data}")
@@ -27,11 +35,17 @@ class ModelReplyParser:
 
         raw_tool_calls = message.get("tool_calls")
         if raw_tool_calls:
+            if action_protocol != "native_tools":
+                raise RuntimeError("Model used API tool_calls with the prompt_json action protocol")
             if not isinstance(raw_tool_calls, list):
                 raise RuntimeError(f"Model tool_calls must be a list: {message!r}")
             content = self._normalize_nullable_content(message.get("content"))
             cleaned = self._clean_content(content)
             actions = self.parse_tool_calls(raw_tool_calls, allowed_tool_names=allowed_tool_names)
+            if content.strip():
+                content_reply = self.parse_reply(content, allowed_tool_names=allowed_tool_names)
+                if content_reply.actions:
+                    raise RuntimeError("Model mixed API tool_calls and content actions")
             return ModelReply(
                 message=cleaned.message or "Model requested tool calls.",
                 actions=actions,
@@ -45,7 +59,38 @@ class ModelReplyParser:
         content = self._normalize_content(message.get("content"))
         if not content.strip():
             raise RuntimeError(f"Model response content was empty: {message!r}")
-        return self.parse_reply(content, allowed_tool_names=allowed_tool_names)
+        return self._parse_protocol_content(
+            content,
+            action_protocol=action_protocol,
+            allowed_tool_names=allowed_tool_names,
+        )
+
+    def _parse_protocol_content(
+        self,
+        content: str,
+        *,
+        action_protocol: str,
+        allowed_tool_names: set[str] | None,
+    ) -> ModelReply:
+        try:
+            payload = json.loads(content)
+        except json.JSONDecodeError as error:
+            raise RuntimeError(
+                f"Model response must be strict JSON for the {action_protocol} action protocol"
+            ) from error
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"Model response must be a JSON object for the {action_protocol} action protocol")
+
+        required_fields = {"message", "done"}
+        allowed_fields = required_fields | {"actions"}
+        if not required_fields.issubset(payload) or not set(payload).issubset(allowed_fields):
+            field_list = ", ".join(sorted(allowed_fields))
+            raise RuntimeError(f"Model response must contain required fields and only {field_list}")
+        if action_protocol == "prompt_json" and "actions" not in payload:
+            raise RuntimeError("Model response must contain required fields and only actions, done, message")
+        if action_protocol == "native_tools" and payload.get("actions", []) != []:
+            raise RuntimeError("Model used content actions with the native_tools action protocol")
+        return self._build_reply(payload, allowed_tool_names=allowed_tool_names, strict=True)
 
     def parse_tool_calls(
         self,
@@ -148,15 +193,29 @@ class ModelReplyParser:
                     metadata=self._cleaned_metadata(cleaned),
                 )
 
+        return self._build_reply(payload, allowed_tool_names=allowed_tool_names)
+
+    def _build_reply(
+        self,
+        payload: dict[str, object],
+        *,
+        allowed_tool_names: set[str] | None = None,
+        strict: bool = False,
+    ) -> ModelReply:
         message = payload.get("message")
         if not isinstance(message, str) or not message.strip():
-            if "actions" in payload:
+            if not strict and "actions" in payload:
                 message = "Model requested tool calls."
             else:
                 raise RuntimeError(f"Model response missing message: {payload}")
 
-        done = bool(payload.get("done", False))
+        raw_done = payload.get("done", False)
+        if strict and not isinstance(raw_done, bool):
+            raise RuntimeError("Model response done must be a boolean")
+        done = bool(raw_done)
         raw_actions = payload.get("actions", [])
+        if strict and not isinstance(raw_actions, list):
+            raise RuntimeError("Model response actions must be a list")
         if not isinstance(raw_actions, list):
             raise RuntimeError(f"Model actions must be a list: {payload}")
 
@@ -176,7 +235,7 @@ class ModelReplyParser:
             actions.append(ToolAction(name=name, arguments=arguments))
 
         if actions and done:
-            done = False
+            raise RuntimeError("Model response invariant violated: done=true requires actions to be empty")
 
         cleaned = self._clean_content(message)
         return ModelReply(

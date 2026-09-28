@@ -919,6 +919,68 @@ def test_parse_response_rejects_empty_content_without_tool_calls():
         parser.parse_response(data, allowed_tool_names=set())
 
 
+def test_parse_response_rejects_mixed_native_and_content_actions():
+    parser = ModelReplyParser()
+    data = {
+        "choices": [{
+            "message": {
+                "content": '{"message":"working","done":false,"actions":[{"name":"read_file","arguments":{}}]}',
+                "tool_calls": [{
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }],
+            }
+        }]
+    }
+
+    with pytest.raises(RuntimeError, match="mixed API tool_calls and content actions"):
+        parser.parse_response(data, allowed_tool_names={"read_file"})
+
+
+def test_parse_response_rejects_native_calls_under_prompt_json_protocol():
+    parser = ModelReplyParser()
+    data = {
+        "choices": [{
+            "message": {
+                "content": None,
+                "tool_calls": [{
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }],
+            }
+        }]
+    }
+
+    with pytest.raises(RuntimeError, match="prompt_json action protocol"):
+        parser.parse_response(data, allowed_tool_names={"read_file"}, action_protocol="prompt_json")
+
+
+@pytest.mark.parametrize(
+    "content",
+    [
+        "普通文本回复",
+        '{"message":"done","done":"true","actions":[]}',
+        '{"message":"done","done":true,"actions":[],"extra":1}',
+        '{"message":"finished","done":true,"actions":[{"name":"read_file","arguments":{}}]}',
+    ],
+)
+def test_prompt_json_protocol_rejects_nonconforming_content(content):
+    parser = ModelReplyParser()
+    data = {"choices": [{"message": {"content": content}}]}
+
+    with pytest.raises(RuntimeError):
+        parser.parse_response(data, action_protocol="prompt_json")
+
+
+@pytest.mark.parametrize("content", ["plain text", '{"message":"done","done":"false"}'])
+def test_native_protocol_rejects_nonconforming_content(content):
+    parser = ModelReplyParser()
+    data = {"choices": [{"message": {"content": content}}]}
+
+    with pytest.raises(RuntimeError):
+        parser.parse_response(data, action_protocol="native_tools")
+
+
 def test_parse_reply_converts_xmlish_content_tool_call():
     parser = ModelReplyParser()
     content = """<think>Need to search.</think>

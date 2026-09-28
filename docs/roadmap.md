@@ -108,7 +108,7 @@ Python 3.14.4，基准 revision `d5f38a9` 加当前工作树修改（当前工�
 - `[x]` **P0-03** 中断、模型/工具错误、审批拒绝和完成门禁已有结构化恢复路径。
 - `[~]` **P0-03** task phase、blocker、evidence 和 resume 已存在；需要建立唯一共享 Task State Model，覆盖目标、验收、依赖、证据和 checkpoint。`blocked` 可恢复为 `in_progress`，验证证据失效后不得保持 `verified/done`。
 - `[~]` 已有字符级上下文预算和 artifact envelope；后续采用模型感知 token 预算、未知模型保守估算、误差余量和 usage 回填，并补齐语义摘要及通用 artifact 回查。
-- `[~]` **P0-04** `action_protocol` 已进入模型能力 profile、Prompt、传输契约和回归测试；parser/runtime 仍未拒绝两种动作通道混用。
+- `[~]` **P0-04** `action_protocol` 已进入模型能力 profile、Prompt 和传输解析；parser/runtime 按 profile 拒绝动作通道混用，严格校验 JSON 回复字段及类型，并拒绝 `done=true` 且 actions 非空的响应。对应回归用例已补齐；正式 JSON Schema 与完整验收仍待完成。
 - `[ ]` 使用正式 JSON Schema 校验 `message`、`done`、`actions` 及工具参数，并固定 `done/actions` 状态不变量。
 - `[~]` **P0-05** 已有凭据扫描、内容拦截、MCP 不可信 metadata 风险提升和 workspace 路径检查；统一不可信内容标记及 prompt injection 端到端测试仍待完成。
 - `[~]` **P0-05** 已有 `progress_required`、错误码、retryability 和模型重试；运行时预算、错误分类、退避、幂等和副作用重试合同仍待统一。

@@ -157,6 +157,7 @@ class OpenAICompatibleModelClient:
         reply = self.parser.parse_response(
             data,
             allowed_tool_names={tool.name for tool in session.available_tools},
+            action_protocol=self.capability_profile.action_protocol,
         )
         if self.logger is not None:
             self.logger.record(
