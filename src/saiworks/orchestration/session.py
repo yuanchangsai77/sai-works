@@ -86,7 +86,9 @@ class SessionContext:
         return list(dict.fromkeys(values))
 
     def _record_evidence(self, result: ToolResult, artifact_refs: list[str]) -> None:
+        previous_revision = self.checkpoint.workspace_revision
         invalidated = result.metadata.get("invalidates_evidence", [])
+        invalidated_kinds = set()
         if isinstance(invalidated, list):
             invalidated_kinds = {item for item in invalidated if isinstance(item, str) and item}
             self.checkpoint.evidence = [
@@ -106,6 +108,8 @@ class SessionContext:
             and "workspace_change" not in kinds
         ):
             self.checkpoint.workspace_revision += 1
+        if invalidated_kinds or self.checkpoint.workspace_revision != previous_revision:
+            self.checkpoint.revoke_completion()
         if not kinds:
             return
         revision = self.checkpoint.workspace_revision

@@ -619,7 +619,7 @@ class ExecutionEngine:
         if summary.outcome == "completed":
             summary.blockers = []
             summary.checkpoint.blockers = []
-            summary.checkpoint.phase = "completed"
+            summary.checkpoint.mark_done()
         else:
             summary.blockers = (
                 list(summary.blockers)
@@ -627,7 +627,9 @@ class ExecutionEngine:
                 else self._runtime_blockers(unresolved, summary)
             )
             summary.checkpoint.blockers = list(summary.blockers)
-            summary.checkpoint.phase = "blocked" if summary.outcome == "blocked" else "incomplete"
+            target_phase = "blocked" if summary.outcome == "blocked" else "in_progress"
+            if summary.checkpoint.phase != target_phase:
+                summary.checkpoint.transition_to(target_phase)
         self.current_session = None
         if self._keep_tool_state and self.capability_warehouse is not None:
             summary.active_instructions = self.capability_warehouse.persisted_instructions()
@@ -764,7 +766,7 @@ class ExecutionEngine:
             checkpoint.runtime_state["shell_cwd"] = str(shell_cwd)
         else:
             checkpoint.runtime_state["shell_cwd"] = request.cwd
-        checkpoint.phase = "executing"
+        checkpoint.transition_to("in_progress")
         checkpoint.blockers = []
         return checkpoint
 
@@ -809,7 +811,8 @@ class ExecutionEngine:
             retryability="retryable",
             required_action="resume",
         )
-        checkpoint.phase = "incomplete"
+        if checkpoint.phase != "in_progress":
+            checkpoint.transition_to("in_progress")
         checkpoint.blockers = [blocker]
         return ExecutionSummary(
             final_message=message,

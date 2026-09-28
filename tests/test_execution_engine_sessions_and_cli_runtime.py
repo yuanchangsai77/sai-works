@@ -42,6 +42,43 @@ def test_scaffold_runs_end_to_end(tmp_path, monkeypatch):
     assert summary.tool_results[0].success is True
 
 
+def test_task_checkpoint_enforces_recoverable_lifecycle_and_evidence_invalidation(tmp_path):
+    checkpoint = TaskCheckpoint(task_id="task-1")
+    assert checkpoint.phase == "pending"
+    checkpoint.transition_to("in_progress")
+    checkpoint.transition_to("verified")
+    checkpoint.transition_to("done")
+
+    session = SessionContext(
+        request=UserRequest(prompt="change files", cwd=str(tmp_path)),
+        checkpoint=checkpoint,
+    )
+    session.add_tool_result(
+        ToolResult(
+            name="write_file",
+            success=True,
+            output="updated",
+            metadata={"invalidates_workspace_state": True},
+        )
+    )
+
+    assert checkpoint.phase == "in_progress"
+    assert checkpoint.workspace_revision == 1
+
+
+def test_task_checkpoint_migrates_legacy_phase_names():
+    assert TaskCheckpoint(phase="executing").phase == "in_progress"
+    assert TaskCheckpoint(phase="incomplete").phase == "in_progress"
+    assert TaskCheckpoint(phase="completed").phase == "done"
+    blocked = TaskCheckpoint()
+    blocked.transition_to("in_progress")
+    blocked.transition_to("blocked")
+    blocked.transition_to("in_progress")
+    assert blocked.phase == "in_progress"
+    with pytest.raises(ValueError, match="Invalid task state transition"):
+        TaskCheckpoint().transition_to("done")
+
+
 def test_engine_routes_only_model_natural_language_stream_to_progress_reporter(tmp_path):
     class StreamingModel:
         observer = None
@@ -173,6 +210,7 @@ def test_completion_gate_rejects_protocol_placeholder_then_accepts_replacement(t
 
     assert model.calls == 2
     assert summary.outcome == "completed"
+    assert summary.checkpoint.phase == "done"
     assert summary.final_message == "The workspace inspection is complete."
     assert [item.success for item in summary.tool_results if item.name == "completion_gate"] == [False, True]
 
@@ -1079,6 +1117,7 @@ def test_engine_stops_repeated_non_retryable_tool_failures(tmp_path):
     assert model.calls == 2
     assert "requires explicit approval" in summary.final_message
     assert summary.outcome == "blocked"
+    assert summary.checkpoint.phase == "blocked"
     assert summary.tool_results[-1].error_code == "approval_required"
     assert [event.name for event in logger.events].count("tool.result") == 2
 
@@ -3141,7 +3180,7 @@ def test_session_store_migrates_legacy_checkpoint_without_treating_actions_as_ev
         }
     )
 
-    assert checkpoint.schema_version == 2
+    assert checkpoint.schema_version == 3
     assert checkpoint.task_id == ""
     assert checkpoint.workspace_revision == 0
     assert checkpoint.evidence == []

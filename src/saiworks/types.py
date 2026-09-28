@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any
+from enum import StrEnum
+from typing import Any, ClassVar
 
 
 @dataclass(slots=True)
@@ -77,16 +78,24 @@ class EvidenceRecord:
     source_task_ids: list[str] = field(default_factory=list)
 
 
+class TaskStatus(StrEnum):
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    BLOCKED = "blocked"
+    VERIFIED = "verified"
+    DONE = "done"
+
+
 @dataclass(slots=True)
 class TaskCheckpoint:
     """Bounded projection of execution facts used for recovery and handoff."""
 
     objective: str = ""
-    schema_version: int = 2
+    schema_version: int = 3
     task_id: str = ""
     workspace_root: str = ""
     workspace_revision: int = 0
-    phase: str = "executing"
+    phase: TaskStatus | str = TaskStatus.PENDING
     completed_actions: list[str] = field(default_factory=list)
     artifacts: list[str] = field(default_factory=list)
     evidence: list[EvidenceRecord] = field(default_factory=list)
@@ -94,6 +103,59 @@ class TaskCheckpoint:
     unmet_deliverables: list[str] = field(default_factory=list)
     blockers: list[RuntimeBlocker] = field(default_factory=list)
     runtime_state: dict[str, str] = field(default_factory=dict)
+
+    _PHASE_ALIASES: ClassVar[dict[str, TaskStatus]] = {
+        "executing": TaskStatus.IN_PROGRESS,
+        "incomplete": TaskStatus.IN_PROGRESS,
+        "completed": TaskStatus.DONE,
+    }
+    _PHASE_TRANSITIONS: ClassVar[dict[TaskStatus, set[TaskStatus]]] = {
+        TaskStatus.PENDING: {TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED},
+        TaskStatus.IN_PROGRESS: {TaskStatus.BLOCKED, TaskStatus.VERIFIED},
+        TaskStatus.BLOCKED: {TaskStatus.IN_PROGRESS},
+        TaskStatus.VERIFIED: {TaskStatus.DONE, TaskStatus.IN_PROGRESS, TaskStatus.BLOCKED},
+        TaskStatus.DONE: {TaskStatus.IN_PROGRESS},
+    }
+
+    def __post_init__(self) -> None:
+        self.schema_version = max(3, self.schema_version) if isinstance(self.schema_version, int) else 3
+        try:
+            self.phase = self._coerce_phase(self.phase)
+        except ValueError:
+            self.phase = TaskStatus.PENDING
+
+    @classmethod
+    def _coerce_phase(cls, phase: str | TaskStatus) -> TaskStatus:
+        if isinstance(phase, TaskStatus):
+            return phase
+        if not isinstance(phase, str):
+            raise ValueError(f"Unsupported task state: {phase!r}")
+        if phase in cls._PHASE_ALIASES:
+            return cls._PHASE_ALIASES[phase]
+        try:
+            return TaskStatus(phase)
+        except ValueError as error:
+            raise ValueError(f"Unsupported task state: {phase!r}") from error
+
+    def transition_to(self, phase: str | TaskStatus) -> None:
+        """Move the task through its canonical lifecycle, rejecting invalid transitions."""
+        phase = self._coerce_phase(phase)
+        if phase == self.phase:
+            return
+        if phase not in self._PHASE_TRANSITIONS.get(self.phase, set()):
+            raise ValueError(f"Invalid task state transition: {self.phase} -> {phase}")
+        self.phase = phase
+
+    def mark_done(self) -> None:
+        if self.phase == TaskStatus.PENDING:
+            self.transition_to(TaskStatus.IN_PROGRESS)
+        if self.phase == TaskStatus.IN_PROGRESS:
+            self.transition_to(TaskStatus.VERIFIED)
+        self.transition_to(TaskStatus.DONE)
+
+    def revoke_completion(self) -> None:
+        if self.phase in {TaskStatus.VERIFIED, TaskStatus.DONE}:
+            self.transition_to(TaskStatus.IN_PROGRESS)
 
 
 @dataclass(slots=True)

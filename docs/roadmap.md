@@ -28,7 +28,7 @@
 本文维护路线各阶段的逐项实施状态、验收条件及推荐顺序。历史已完成、当前进行中
 和未开始的条目都保留在下方；状态以对应实现、测试和专项文档证据为准。
 
-状态核对日期：2026-09-20。
+状态核对日期：2026-09-28。
 
 当前 runtime 已具备：
 
@@ -45,9 +45,9 @@
 - 原生 inline TUI、会话内编辑历史、审批、中断和运行时输入。
 - run 事件与详情日志。
 
-当前测试收集为 550 个用例，覆盖 engine、model、policy、tools、context、Skill、MCP、
-能力仓库、CLI 和 TUI 的关键路径。最近一次完整执行结果为 `550 passed in 3.65s`，环境为
-Python 3.14.4，基准 revision `d5f38a9` 加当前工作树修改（当前工作树仍有未提交修改）。
+当前测试收集为 560 个用例，覆盖 engine、model、policy、tools、context、Skill、MCP、
+能力仓库、CLI 和 TUI 的关键路径。最近一次完整执行结果为 `560 passed in 2.75s`，环境为
+Python 3.14.4，基准 revision `263f004` 加当前工作树修改（当前工作树仍有未提交修改）。
 
 ### Current Capabilities
 
@@ -106,7 +106,7 @@ Python 3.14.4，基准 revision `d5f38a9` 加当前工作树修改（当前工�
 - `[x]` **P0-01** `ContextPackager` 已建立，具备分组、来源、字符预算、裁剪和省略记录。
 - `[x]` **P0-02** checkpoint 已保存任务事实、read state、恢复信息、active capabilities 和大值引用。
 - `[x]` **P0-03** 中断、模型/工具错误、审批拒绝和完成门禁已有结构化恢复路径。
-- `[~]` **P0-03** task phase、blocker、evidence 和 resume 已存在；需要建立唯一共享 Task State Model，覆盖目标、验收、依赖、证据和 checkpoint。`blocked` 可恢复为 `in_progress`，验证证据失效后不得保持 `verified/done`。
+- `[~]` **P0-03** checkpoint 现以单一任务状态管理 `pending/in_progress/blocked/verified/done`，支持旧状态迁移、阻塞恢复及证据失效后撤销完成状态；验收通过 `required_evidence` 与完成门禁检查。状态迁移回归用例已纳入全量测试并通过；任务依赖图由 P4 Subagent/Team 负责。
 - `[~]` 已有字符级上下文预算和 artifact envelope；后续采用模型感知 token 预算、未知模型保守估算、误差余量和 usage 回填，并补齐语义摘要及通用 artifact 回查。
 - `[~]` **P0-04** `action_protocol` 已进入模型能力 profile、Prompt 和传输解析；parser/runtime 按 profile 拒绝动作通道混用，严格校验 JSON 回复字段及类型，并拒绝 `done=true` 且 actions 非空的响应。对应回归用例已补齐；正式 JSON Schema 与完整验收仍待完成。
 - `[ ]` 使用正式 JSON Schema 校验 `message`、`done`、`actions` 及工具参数，并固定 `done/actions` 状态不变量。

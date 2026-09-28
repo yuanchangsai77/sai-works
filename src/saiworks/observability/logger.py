@@ -539,11 +539,11 @@ class InMemoryLogger:
             return TaskCheckpoint()
         return TaskCheckpoint(
             objective=redact_text(str(getattr(checkpoint, "objective", ""))),
-            schema_version=int(getattr(checkpoint, "schema_version", 2)),
+            schema_version=int(getattr(checkpoint, "schema_version", 3)),
             task_id=str(getattr(checkpoint, "task_id", "")),
             workspace_root=str(getattr(checkpoint, "workspace_root", "")),
             workspace_revision=int(getattr(checkpoint, "workspace_revision", 0)),
-            phase=str(getattr(checkpoint, "phase", "executing")),
+            phase=str(getattr(checkpoint, "phase", "pending")),
             completed_actions=[str(item) for item in getattr(checkpoint, "completed_actions", [])],
             artifacts=[str(item) for item in getattr(checkpoint, "artifacts", [])],
             evidence=[
@@ -582,7 +582,7 @@ class InMemoryLogger:
             return {}
         return {
             "objective": redact_text(getattr(checkpoint, "objective", "")),
-            "schema_version": getattr(checkpoint, "schema_version", 2),
+            "schema_version": getattr(checkpoint, "schema_version", 3),
             "task_id": getattr(checkpoint, "task_id", ""),
             "workspace_root": getattr(checkpoint, "workspace_root", ""),
             "workspace_revision": getattr(checkpoint, "workspace_revision", 0),

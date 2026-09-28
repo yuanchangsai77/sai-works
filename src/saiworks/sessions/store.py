@@ -362,11 +362,11 @@ class SessionStore:
         runtime_state = value.get("runtime_state", {})
         return TaskCheckpoint(
             objective=str(value.get("objective", "")),
-            schema_version=max(2, self._safe_int(value.get("schema_version"), 1)),
+            schema_version=max(3, self._safe_int(value.get("schema_version"), 1)),
             task_id=str(value.get("task_id", "")),
             workspace_root=str(value.get("workspace_root", "")),
             workspace_revision=max(0, self._safe_int(value.get("workspace_revision"), 0)),
-            phase=str(value.get("phase", "executing")),
+            phase=str(value.get("phase", "in_progress")),
             completed_actions=self._string_list(value.get("completed_actions", [])),
             artifacts=self._string_list(value.get("artifacts", [])),
             evidence=self._normalize_evidence(value.get("evidence", [])),

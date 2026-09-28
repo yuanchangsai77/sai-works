@@ -704,7 +704,8 @@ class SubagentRunner:
             required_action="resume",
         )
         summary.blockers = [runtime_blocker]
-        summary.checkpoint.phase = "incomplete"
+        if summary.checkpoint.phase != "in_progress":
+            summary.checkpoint.transition_to("in_progress")
         summary.checkpoint.blockers = [runtime_blocker]
         persisted = False
         if runtime is not None:

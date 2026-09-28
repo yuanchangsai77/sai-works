@@ -226,7 +226,7 @@ def test_logger_indexes_model_payloads_and_terminal_state_by_reference(tmp_path)
     assert finish.payload["checkpoint"] == {
         "task_id": "task-1",
         "workspace_revision": 2,
-        "phase": "executing",
+        "phase": "pending",
         "required_evidence": [],
         "unmet_deliverables": [],
     }

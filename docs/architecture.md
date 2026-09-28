@@ -179,6 +179,19 @@ stable `task_id`, its workspace root, a monotonic workspace revision, and a boun
 user request starts a new task unless the caller explicitly supplies the previous task id (or marks the request as a
 continuation); an incomplete outcome alone is never sufficient authority to inherit completion evidence.
 
+The checkpoint's `phase` is the single task lifecycle state; run outcome and UI progress are summaries, not
+independent persisted task states or completion authorities. The lifecycle is
+`pending -> in_progress -> verified -> done`, with `in_progress -> blocked -> in_progress` for recoverable blockers.
+A run that stops for a retryable or budget reason remains `in_progress`. Only the runtime completion gate may advance
+a task through `verified` to `done`; model text alone cannot do so. A new workspace revision or invalidation of
+required evidence moves `verified` or `done` back to `in_progress`. Resuming a blocked task starts it in
+`in_progress` after task id and workspace-root checks pass. Persisted legacy values `executing`, `incomplete`, and
+`completed` normalize to `in_progress`, `in_progress`, and `done`; the checkpoint schema version records the new
+lifecycle.
+`required_evidence` and `unmet_deliverables` are the runtime-checkable acceptance criteria. Dependency graph
+construction and scheduling remain in the Subagent/Team layer (P4), so the single-task lifecycle does not duplicate
+that graph.
+
 Tools publish semantic evidence kinds such as `workspace_change`, `test`, `read`, and `artifact` through the common
 `ToolResult` contract. Completion policy consumes those evidence kinds and does not depend on concrete tool names.
 Every confirmed workspace mutation advances the checkpoint revision. Observation and verification evidence is valid
