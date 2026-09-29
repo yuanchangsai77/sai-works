@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ..context.packager import ContextPackager, ContextSegment
 from ..orchestration.session import SessionContext
+from ..sessions.messages import model_session_message_content
 from ..types import SessionResumeState, SessionRunTrace, ToolDefinition
 
 
@@ -60,9 +61,10 @@ class ModelPromptBuilder:
             "- Send feedback or a failed verification back to the same child with subagent_resume. Do not spawn a replacement child for the same artifact unless isolation or independent parallel exploration is required.",
         ]
 
+        volatile_system_lines: list[str] = []
         runtime_model = session.request.metadata.get("runtime_model")
         if isinstance(runtime_model, str) and runtime_model:
-            system_lines.extend(
+            volatile_system_lines.extend(
                 [
                     "",
                     "### Runtime Facts:",
@@ -77,7 +79,7 @@ class ModelPromptBuilder:
             if isinstance(model_profile, dict)
             else "native_tools"
         )
-        system_lines.extend(
+        volatile_system_lines.extend(
             [
                 f"- Executable action protocol: {action_protocol}",
                 (
@@ -95,7 +97,7 @@ class ModelPromptBuilder:
             ]
         )
         if isinstance(model_profile, dict):
-            system_lines.extend(
+            volatile_system_lines.extend(
                 [
                     f"- Structured output mode: {model_profile.get('structured_output_mode', 'prompt_json')}",
                     f"- Native tool calls: {bool(model_profile.get('native_tool_calls', True))}",
@@ -107,7 +109,7 @@ class ModelPromptBuilder:
 
         subagent = session.request.metadata.get("subagent")
         if isinstance(subagent, dict) and subagent.get("role") == "subagent":
-            system_lines.extend(
+            volatile_system_lines.extend(
                 [
                     "",
                     "### Delegated Subagent Runtime:",
@@ -120,7 +122,7 @@ class ModelPromptBuilder:
             )
             delegated_task = session.request.metadata.get("delegated_task")
             if isinstance(delegated_task, dict):
-                system_lines.extend(
+                volatile_system_lines.extend(
                     [
                         f"- task_id: {delegated_task.get('task_id', '')}",
                         f"- allowed_effects: {', '.join(delegated_task.get('allowed_effects', []))}",
@@ -131,19 +133,21 @@ class ModelPromptBuilder:
 
         active_instructions = getattr(session, "active_instructions", [])
         if active_instructions:
-            system_lines.append("")
-            system_lines.append("### Active Workflow Instructions:")
+            volatile_system_lines.append("")
+            volatile_system_lines.append("### Active Workflow Instructions:")
             for instruction in active_instructions:
-                system_lines.append("")
-                system_lines.append(f"[Workflow: {instruction.name}]")
-                system_lines.append(instruction.content)
+                volatile_system_lines.append("")
+                volatile_system_lines.append(f"[Workflow: {instruction.name}]")
+                volatile_system_lines.append(instruction.content)
 
         project_rule_lines = self._format_project_rules(session)
         system_lines.extend(project_rule_lines)
-        system_lines.extend(self._format_workspace_summary(session))
-        system_lines.extend(self._format_explicit_context(session))
+        volatile_system_lines.extend(self._format_workspace_summary(session))
+        volatile_system_lines.extend(self._format_explicit_context(session))
 
         tool_lines = ["Available tools:", *self._format_tool_definitions(session)]
+        # Tool descriptions follow stable protocol and project rules so their
+        # per-run changes do not invalidate the leading system prefix.
         system_lines.extend(tool_lines)
 
 
@@ -203,6 +207,16 @@ class ModelPromptBuilder:
         else:
             checkpoint_context = []
 
+        conversation_system_lines: list[str] = []
+        if isinstance(conversation, list):
+            for item in conversation:
+                if not isinstance(item, dict) or item.get("role") != "system":
+                    continue
+                content = item.get("content")
+                if isinstance(content, str) and content:
+                    conversation_system_lines.append(content)
+        conversation_system_context = "\n\n".join(conversation_system_lines)
+
         return self.context_packager.package_segments(
             [
                 ContextSegment("\n".join(protocol_lines), "model protocol", priority=100, required=True),
@@ -210,10 +224,19 @@ class ModelPromptBuilder:
                 ContextSegment("\n".join(project_rule_lines), "project rules", priority=100, required=True),
                 ContextSegment("\n".join(operational_lines), "operational instructions", priority=80),
                 ContextSegment("\n".join(tool_lines), "tool definitions", priority=90),
+                ContextSegment("\n".join(volatile_system_lines), "volatile system context", priority=85),
+                ContextSegment(
+                    conversation_system_context,
+                    "conversation summary",
+                    priority=95,
+                    required=True,
+                ),
             ],
             self._format_conversation_messages(conversation),
             [
                 ContextSegment("\n".join(current_request_lines), "current request", priority=100, required=True),
+            ],
+            [
                 ContextSegment("\n".join(checkpoint_context), "runtime checkpoint", priority=100, required=True),
                 ContextSegment("\n".join(contextual_user_lines), "session recovery context", priority=70),
             ],
@@ -301,7 +324,7 @@ class ModelPromptBuilder:
                 continue
 
             role = item.get("role")
-            content = item.get("content")
+            content = model_session_message_content(item)
             if role not in {"user", "assistant"} or not isinstance(content, str) or not content:
                 continue
 

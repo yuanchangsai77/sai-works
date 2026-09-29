@@ -2,6 +2,14 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+CURRENT_RUN_CONTEXT_PREFIX = (
+    "Current run context (runtime-generated; not part of the user request):"
+)
+
+
+class ContextBudgetExceededError(RuntimeError):
+    """The required instructions and current user request cannot fit together."""
+
 
 @dataclass(frozen=True, slots=True)
 class ContextPackageStats:
@@ -45,38 +53,66 @@ class ContextPackager:
         system_segments: list[ContextSegment],
         conversation: list[dict[str, object]],
         current_segments: list[ContextSegment],
+        trailing_context_segments: list[ContextSegment] | None = None,
     ) -> list[dict[str, object]]:
-        system_limit = max(2_000, int(self.max_chars * 0.55))
+        # Keep the current request whole. Optional history and run state use only
+        # the capacity left after required system instructions and the request.
+        current_cost = self._joined_cost(
+            [item.content for item in current_segments if item.content]
+        )
+        required_system_cost = self._joined_cost(
+            [item.content for item in system_segments if item.content and item.required]
+        )
+        if current_cost + required_system_cost > self.max_chars:
+            raise ContextBudgetExceededError(
+                "Current request and required system instructions exceed the model context budget"
+            )
+
+        system_target = max(2_000, int(self.max_chars * 0.50))
+        system_limit = min(
+            max(system_target, required_system_cost),
+            self.max_chars - current_cost,
+        )
         system, truncated_system = self._pack_segments(system_segments, system_limit)
-        current_budget = max(1_000, self.max_chars - len(system))
-        current, truncated_current = self._pack_segments(current_segments, current_budget)
-        remaining = max(0, self.max_chars - len(system) - len(current))
+        stable_count = len(current_segments)
+        stable_parts, truncated_current = self._pack_segment_parts(
+            current_segments, current_cost
+        )
+        current = "\n\n".join(
+            stable_parts[index] for index in range(stable_count) if index in stable_parts
+        )
+        trailing_segments = trailing_context_segments or []
+        has_trailing_segments = any(item.content for item in trailing_segments)
+        trailing_overhead = len(CURRENT_RUN_CONTEXT_PREFIX) + 2 if has_trailing_segments else 0
+        remaining_after_system_and_request = max(
+            0, self.max_chars - len(system) - len(current)
+        )
+        trailing_parts, trailing_truncated = self._pack_segment_parts(
+            trailing_segments,
+            min(
+                int(self.max_chars * 0.10),
+                max(0, remaining_after_system_and_request - trailing_overhead),
+            ),
+        )
+        truncated_current = truncated_current or trailing_truncated
+        trailing = "\n\n".join(
+            trailing_parts[index]
+            for index in range(len(trailing_segments))
+            if index in trailing_parts
+        )
+        trailing_message = (
+            f"{CURRENT_RUN_CONTEXT_PREFIX}\n\n"
+            f"{trailing}"
+            if trailing
+            else ""
+        )
+        history_limit = max(
+            0,
+            self.max_chars - len(system) - len(current) - len(trailing_message),
+        )
+        selected, omitted = self._select_history(conversation, history_limit)
 
-        selected: list[dict[str, object]] = []
-        omitted = 0
-        for message in reversed(conversation):
-            content = message.get("content")
-            role = message.get("role")
-            if role not in {"user", "assistant"} or not isinstance(content, str) or not content:
-                continue
-            cost = len(content)
-            if cost > remaining:
-                omitted += 1
-                continue
-            selected.append({"role": role, "content": content})
-            remaining -= cost
-        selected.reverse()
-        if omitted:
-            marker = f"[Runtime context omitted {omitted} older conversation messages.]"
-            while selected and len(marker) > remaining:
-                removed = selected.pop(0)
-                remaining += len(str(removed.get("content", "")))
-                omitted += 1
-                marker = f"[Runtime context omitted {omitted} older conversation messages.]"
-            if len(marker) <= remaining:
-                selected.insert(0, {"role": "user", "content": marker})
-
-        included = len(system) + len(current) + sum(
+        included = len(system) + len(current) + len(trailing_message) + sum(
             len(str(item.get("content", ""))) for item in selected
         )
         self.last_stats = ContextPackageStats(
@@ -86,19 +122,79 @@ class ContextPackager:
             truncated_system=truncated_system,
             truncated_current=truncated_current,
         )
-        return [
+        messages = [
             {"role": "system", "content": system},
             *selected,
             {"role": "user", "content": current},
         ]
+        if trailing:
+            messages.append({"role": "user", "content": trailing_message})
+        return messages
+
+    @staticmethod
+    def _joined_cost(contents: list[str]) -> int:
+        return sum(len(content) for content in contents) + max(0, len(contents) - 1) * 2
+
+    def _select_history(
+        self,
+        conversation: list[dict[str, object]],
+        limit: int,
+    ) -> tuple[list[dict[str, object]], int]:
+        turns: list[list[dict[str, str]]] = []
+        pending_user: dict[str, str] | None = None
+        for message in conversation:
+            role = message.get("role")
+            content = message.get("content")
+            if role == "user" and isinstance(content, str) and content:
+                if pending_user is not None:
+                    pending_user = None
+                pending_user = {"role": "user", "content": content}
+            elif role == "assistant" and isinstance(content, str) and content and pending_user:
+                turns.append([pending_user, {"role": "assistant", "content": content}])
+                pending_user = None
+
+        marker = "[Earlier conversation omitted.]"
+        budget = max(0, limit)
+        total_cost = sum(
+            len(item["content"]) for turn in turns for item in turn
+        )
+        if total_cost <= budget:
+            return [message for turn in turns for message in turn], 0
+
+        remaining = max(0, budget - len(marker))
+        selected_turns: list[list[dict[str, str]]] = []
+        for turn in reversed(turns):
+            cost = sum(len(item["content"]) for item in turn)
+            if cost > remaining:
+                break
+            selected_turns.append(turn)
+            remaining -= cost
+        selected_turns.reverse()
+        omitted = len(turns) - len(selected_turns)
+        selected = [message for turn in selected_turns for message in turn]
+        if omitted:
+            selected.insert(0, {"role": "user", "content": marker})
+        return selected, omitted * 2
 
     def _pack_segments(
         self,
         segments: list[ContextSegment],
         limit: int,
     ) -> tuple[str, bool]:
-        candidates = [item for item in segments if item.content]
-        required = [(index, item) for index, item in enumerate(candidates) if item.required]
+        selected, truncated = self._pack_segment_parts(segments, limit)
+        return "\n\n".join(selected[index] for index in sorted(selected)), truncated
+
+    def _pack_segment_parts(
+        self,
+        segments: list[ContextSegment],
+        limit: int,
+    ) -> tuple[dict[int, str], bool]:
+        candidates = list(segments)
+        required = [
+            (index, item)
+            for index, item in enumerate(candidates)
+            if item.content and item.required
+        ]
         required_cost = sum(len(item.content) for _, item in required) + max(0, len(required) - 1) * 2
         if required and required_cost > limit:
             selected: dict[int, str] = {}
@@ -115,9 +211,9 @@ class ContextPackager:
                 if clipped:
                     selected[index] = clipped
                     remaining -= len(clipped) + separator
-            return "\n\n".join(selected[index] for index in sorted(selected)), True
+            return selected, True
         ranked = sorted(
-            enumerate(candidates),
+            ((index, item) for index, item in enumerate(candidates) if item.content),
             key=lambda item: (not item[1].required, -item[1].priority, item[0]),
         )
         selected: dict[int, str] = {}
@@ -140,7 +236,7 @@ class ContextPackager:
             if clipped:
                 selected[index] = clipped
                 remaining -= len(clipped) + separator
-        return "\n\n".join(selected[index] for index in sorted(selected)), truncated
+        return selected, truncated
 
     def _clip_segment(self, segment: ContextSegment, limit: int) -> str:
         marker = f"\n[Runtime truncated {segment.label}.]\n"

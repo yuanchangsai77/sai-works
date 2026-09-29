@@ -113,6 +113,13 @@ class OpenAICompatibleModelClient:
             },
         )
         messages = self.prompt_builder.build_messages(session)
+        # Persist the stable request fields, not their context-packaged
+        # representation. Packaging can truncate this message to fit the model's
+        # prompt budget, while session history must retain the full input and cwd.
+        session.request.metadata["last_session_user_message"] = (
+            f"Current working directory: {session.request.cwd}\n"
+            f"User request: {session.request.prompt}"
+        )
         payload = {
             "model": self.model,
             "messages": messages,
