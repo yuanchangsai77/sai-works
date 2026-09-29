@@ -272,3 +272,6 @@ class StoredSession:
     launch_source: str = "direct"
     session_image_id: str = ""
     revision: int = 0
+    compaction_archive_ids: list[str] = field(default_factory=list)
+    context_generation: int = 0
+    context_trace_after_run_id: str = ""

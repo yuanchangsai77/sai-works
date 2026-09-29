@@ -6,6 +6,7 @@ import sys
 from html import unescape
 
 from ..types import ExecutionSummary, SessionRecord, StoredSession, ToolResult, UserRequest
+from ..sessions.messages import display_session_message
 from .input import PromptBox, StatusBar
 from .terminal import Spinner, colored_border
 
@@ -71,6 +72,35 @@ class ConsolePresenter:
         from rich.padding import Padding
 
         return Padding(Markdown(text), (top_padding, 0, 0, 3))
+
+    @staticmethod
+    def _clean_summary_for_display(text: str) -> str:
+        text = re.sub(r"^\[(?:AI|Local) Executive Summary\]\s*", "", text, count=1)
+        return "\n".join(
+            line for line in text.splitlines()
+            if not line.lstrip().startswith("Archived conversation reference:")
+        ).strip()
+
+    def _print_dim_markdown(self, text: str) -> None:
+        content = self._clean_summary_for_display(text)
+        if not content:
+            return
+        render_rows = getattr(self, "_render_dim_markdown_rows", None)
+        surface = getattr(self, "_surface", None)
+        if callable(render_rows) and surface is not None:
+            surface.commit(render_rows(content))
+            return
+        try:
+            from rich.console import Console
+            console = Console(file=getattr(self, "_output", sys.stdout))
+            console.print(self._markdown_renderable(content), style="dim")
+            self._print()
+        except ImportError:
+            gray = "\033[90m"
+            reset = "\033[0m"
+            lines = [re.sub(r"^\s{0,3}#{1,6}\s+", "", line) for line in content.splitlines()]
+            indented = "\n".join(f"   {line}" for line in lines)
+            self._print(f"{gray}{indented}{reset}\n")
 
     def _summarize_tool_result(self, result: ToolResult) -> str:
         if self.tool_result_summarizer is not None:
@@ -285,7 +315,9 @@ class ConsolePresenter:
 
         self._print(f"\n{GRAY}─── Historical Conversation History ───────────────────{RESET}")
 
-        if hasattr(session_or_messages, "trace") and session_or_messages.trace:
+        if hasattr(session_or_messages, "messages"):
+            messages = session_or_messages.messages
+        elif hasattr(session_or_messages, "trace") and session_or_messages.trace:
             for run in session_or_messages.trace:
                 # 1. User prompt (styled)
                 self.show_user_prompt(run.prompt)
@@ -332,26 +364,25 @@ class ConsolePresenter:
                 # 3. Final message (rendered)
                 if run.final_message:
                     self.show_summary(ExecutionSummary(final_message=run.final_message, tool_results=[]))
+            messages = []
         else:
             messages = session_or_messages
             if not messages:
                 self._print(f"{GRAY}───────────────────────────────────────────────────────{RESET}\n")
                 return
 
-            for msg in messages:
-                role = msg.get("role")
-                content = msg.get("content", "")
-                if not content:
-                    continue
+        for msg in messages:
+            role = msg.get("role")
+            content = display_session_message(msg, include_cwd=True)
+            if not content:
+                continue
 
-                if role == "user":
-                    self.show_user_prompt(content)
-                elif role == "assistant":
-                    self.show_summary(ExecutionSummary(final_message=content, tool_results=[]))
-                elif role == "system":
-                    self._print(f"\n {GRAY}[System Context Summary]{RESET}")
-                    indented = "\n".join(f"   {line}" for line in content.splitlines())
-                    self._print(f"{GRAY}{indented}{RESET}\n")
+            if role == "user":
+                self.show_user_prompt(content)
+            elif role == "assistant":
+                self.show_summary(ExecutionSummary(final_message=content, tool_results=[]))
+            elif role == "system":
+                self._print_dim_markdown(content)
 
         self._print(f"{GRAY}───────────────────────────────────────────────────────{RESET}\n")
 
@@ -531,11 +562,21 @@ class ConsolePresenter:
         RESET = "\033[0m"
         self._print(f"\n {GREEN}✓ Conversation context reset.{RESET} Starting a fresh conversation.\n")
 
-    def show_context_compacted(self, old_count: int, new_count: int) -> None:
+    def show_context_compacted(
+        self,
+        old_count: int,
+        new_count: int,
+        archive_id: str = "",
+        summary: str = "",
+    ) -> None:
         GREEN = "\033[1;32m"
         RESET = "\033[0m"
         BOLD = "\033[1m"
         self._print(f"\n {GREEN}✓ Conversation context compacted.{RESET} Reduced from {BOLD}{old_count}{RESET} to {BOLD}{new_count}{RESET} messages.\n")
+        if archive_id:
+            self._print(f"   Archived history: {archive_id} (view with /history {archive_id})\n")
+        if summary:
+            self._print_dim_markdown(summary)
 
 
     def show_status(self, session=None, engine=None) -> None:

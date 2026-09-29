@@ -2,10 +2,11 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from uuid import uuid4
+from uuid import UUID, uuid4
 from typing import Iterator
 
 from ..types import (
@@ -19,23 +20,47 @@ from ..types import (
     TaskCheckpoint,
     WorkspaceSessionState,
 )
+from .messages import (
+    SESSION_REQUEST_MESSAGE_FORMAT,
+    display_session_message,
+    model_session_message_content,
+)
 
 try:
     import fcntl
 except ImportError:  # pragma: no cover
     fcntl = None
 
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover
+    msvcrt = None
 
-MAX_SESSION_MESSAGES = 40
-MAX_SESSION_MESSAGE_CHARS = 120_000
+
+DEFAULT_SESSION_MESSAGE_CHARS = 120_000
+MAX_SESSION_MESSAGE_CHARS = 2_000_000
 MAX_SESSION_TRACES = 24
 MAX_TRACE_TURNS = 20
 
 
 class SessionStore:
-    def __init__(self, base_dir: str | Path | None = None) -> None:
+    def __init__(
+        self,
+        base_dir: str | Path | None = None,
+        *,
+        max_message_chars: int | None = None,
+    ) -> None:
         root = Path(base_dir) if base_dir is not None else Path(__file__).resolve().parents[3]
         self.base_dir = root / ".saiworks" / "sessions"
+        requested_limit = (
+            DEFAULT_SESSION_MESSAGE_CHARS
+            if max_message_chars is None
+            else int(max_message_chars)
+        )
+        self.max_message_chars = min(
+            MAX_SESSION_MESSAGE_CHARS,
+            max(DEFAULT_SESSION_MESSAGE_CHARS, requested_limit),
+        )
 
     def create(
         self,
@@ -85,11 +110,14 @@ class SessionStore:
             updated_at = self._timestamp()
             session.updated_at = updated_at
             session.revision = int(existing.get("revision", 0)) + 1
-            session.messages = self._bounded_messages(session.messages)
             session.run_ids = list(dict.fromkeys(session.run_ids))
             session.trace = list(session.trace[-MAX_SESSION_TRACES:])
             latest_trace = session.trace[-1] if session.trace else None
-            if latest_trace is not None and latest_trace.run_id != session.resume_state.last_run_id:
+            if (
+                latest_trace is not None
+                and latest_trace.run_id != session.resume_state.last_run_id
+                and latest_trace.run_id != session.context_trace_after_run_id
+            ):
                 session.resume_state = self._build_resume_state(session)
             payload = {
             "session_id": session.session_id,
@@ -108,13 +136,33 @@ class SessionStore:
             "session_role": session.session_role,
             "launch_source": session.launch_source,
             "session_image_id": session.session_image_id,
+            "compaction_archive_ids": session.compaction_archive_ids,
+            "context_generation": session.context_generation,
+            "context_trace_after_run_id": session.context_trace_after_run_id,
             "revision": session.revision,
             }
             _atomic_text_write(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
-            self._write_trace_log(session)
+            # The JSON snapshot is authoritative. A failure to refresh its
+            # derived text log must not make callers roll back a committed save.
+            try:
+                self._write_trace_log(session)
+            except OSError:
+                pass
             replay_path = self.base_dir / f"{session.session_id}.replay.log"
             if replay_path.exists():
-                replay_path.unlink()
+                try:
+                    replay_path.unlink()
+                except OSError:
+                    pass
+
+    @contextmanager
+    def conversation_lock(self, session_id: str) -> Iterator[None]:
+        """Serialize model turns and context replacement for one session."""
+        if not self._valid_session_id(session_id):
+            raise ValueError("invalid session id")
+        lock_path = self.base_dir / f"{session_id}.conversation.lock"
+        with _locked(lock_path):
+            yield
 
     def load(self, session_id: str) -> StoredSession | None:
         if not self._valid_session_id(session_id):
@@ -146,19 +194,83 @@ class SessionStore:
             launch_source=str(payload.get("launch_source", "direct")),
             session_image_id=str(payload.get("session_image_id", "")),
             revision=self._safe_int(payload.get("revision"), 0),
+            compaction_archive_ids=self._string_list(payload.get("compaction_archive_ids", [])),
+            context_generation=self._safe_int(payload.get("context_generation"), 0),
+            context_trace_after_run_id=str(payload.get("context_trace_after_run_id", "")),
         )
+
+    def archive_messages(
+        self,
+        session_id: str,
+        messages: list[dict[str, str]],
+    ) -> str:
+        if not self._valid_session_id(session_id):
+            raise ValueError("invalid session id")
+        archive_id = uuid4().hex
+        archive_dir = self.base_dir / "archives" / session_id
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        archived_messages = [
+            dict(item)
+            for item in messages
+            if isinstance(item, dict)
+            and isinstance(item.get("role"), str)
+            and isinstance(item.get("content"), str)
+        ]
+        payload = {
+            "session_id": session_id,
+            "archive_id": archive_id,
+            "created_at": self._timestamp(),
+            "messages": archived_messages,
+        }
+        path = archive_dir / f"{archive_id}.json"
+        _atomic_text_write(path, json.dumps(payload, ensure_ascii=False, indent=2) + "\n")
+        return archive_id
+
+    def load_archived_messages(
+        self,
+        session_id: str,
+        archive_id: str,
+    ) -> list[dict[str, str]] | None:
+        if not self._valid_session_id(session_id):
+            return None
+        try:
+            if UUID(archive_id).hex != archive_id:
+                return None
+        except (ValueError, AttributeError, TypeError):
+            return None
+        path = self.base_dir / "archives" / session_id / f"{archive_id}.json"
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, TypeError, ValueError, json.JSONDecodeError):
+            return None
+        if (
+            not isinstance(payload, dict)
+            or payload.get("session_id") != session_id
+            or payload.get("archive_id") != archive_id
+            or not isinstance(payload.get("messages"), list)
+        ):
+            return None
+        return [
+            dict(item)
+            for item in payload["messages"]
+            if isinstance(item, dict)
+            and isinstance(item.get("role"), str)
+            and isinstance(item.get("content"), str)
+        ]
 
     def _merge_stale_session(self, session: StoredSession, existing: dict[str, object]) -> None:
         if not existing:
             return
         existing_revision = self._safe_int(existing.get("revision"), 0)
+        existing_generation = self._safe_int(existing.get("context_generation"), 0)
         if not session.cluster_id:
             session.cluster_id = str(existing.get("cluster_id", ""))
             session.parent_session_id = str(existing.get("parent_session_id", session.parent_session_id))
             session.session_role = str(existing.get("session_role", session.session_role))
             session.launch_source = str(existing.get("launch_source", session.launch_source))
             session.session_image_id = str(existing.get("session_image_id", session.session_image_id))
-        if session.revision >= existing_revision:
+        stale_context_generation = session.context_generation < existing_generation
+        if session.revision >= existing_revision and not stale_context_generation:
             return
         session.cwd = str(existing.get("cwd", session.cwd))
         session.created_at = str(existing.get("created_at", session.created_at))
@@ -172,9 +284,24 @@ class SessionStore:
         if persisted_status in terminal_statuses:
             session.status = persisted_status
         persisted_messages = self._normalize_messages(existing.get("messages", []))
-        for message in persisted_messages:
-            if message not in session.messages:
-                session.messages.append(message)
+        if stale_context_generation:
+            # A stale writer must not restore messages removed by compaction.
+            session.messages = persisted_messages
+            session.context_generation = existing_generation
+            session.context_trace_after_run_id = str(
+                existing.get("context_trace_after_run_id", "")
+            )
+        elif session.context_generation == existing_generation:
+            for message in persisted_messages:
+                if message not in session.messages:
+                    session.messages.append(message)
+            session.context_trace_after_run_id = str(
+                existing.get("context_trace_after_run_id", session.context_trace_after_run_id)
+            )
+        persisted_archives = self._string_list(existing.get("compaction_archive_ids", []))
+        session.compaction_archive_ids = list(
+            dict.fromkeys([*persisted_archives, *session.compaction_archive_ids])
+        )
         persisted_runs = self._normalize_run_ids(existing.get("run_ids", []))
         session.run_ids = list(dict.fromkeys([*persisted_runs, *session.run_ids]))
         persisted_capabilities = self._string_list(existing.get("active_capability_ids", []))
@@ -182,12 +309,18 @@ class SessionStore:
             dict.fromkeys([*persisted_capabilities, *session.active_capability_ids])
         )
         persisted_trace = self._normalize_trace(existing.get("trace", []))
-        persisted_run_ids = {item.run_id for item in persisted_trace}
-        session.trace = [
-            *persisted_trace,
-            *[item for item in session.trace if item.run_id not in persisted_run_ids],
-        ]
-        session.resume_state = self._normalize_resume_state(existing.get("resume_state", {}))
+        if stale_context_generation:
+            # Runs that started in the old context generation can contain the
+            # archived transcript in their prompts, tool results, or checkpoint.
+            session.trace = persisted_trace
+        else:
+            persisted_run_ids = {item.run_id for item in persisted_trace}
+            session.trace = [
+                *persisted_trace,
+                *[item for item in session.trace if item.run_id not in persisted_run_ids],
+            ]
+        if session.context_generation == existing_generation:
+            session.resume_state = self._normalize_resume_state(existing.get("resume_state", {}))
         session.workspace_state = self._normalize_workspace_state(
             existing.get("workspace_state", {}), session.cwd
         )
@@ -209,7 +342,7 @@ class SessionStore:
             preview = ""
             for message in session.messages:
                 if message.get("role") == "user":
-                    preview = self._preview(message.get("content", ""))
+                    preview = self._preview(display_session_message(message))
                     break
 
             sessions.append(
@@ -244,21 +377,17 @@ class SessionStore:
             role = item.get("role")
             content = item.get("content")
             if isinstance(role, str) and isinstance(content, str):
-                normalized.append({"role": role, "content": content})
-        return self._bounded_messages(normalized)
-
-    def _bounded_messages(self, messages: list[dict[str, str]]) -> list[dict[str, str]]:
-        selected: list[dict[str, str]] = []
-        remaining = MAX_SESSION_MESSAGE_CHARS
-        for item in reversed(messages[-MAX_SESSION_MESSAGES:]):
-            if remaining <= 0:
-                break
-            content = str(item.get("content", ""))
-            if len(content) > remaining:
-                content = content[-remaining:]
-            selected.append({"role": str(item.get("role", "user")), "content": content})
-            remaining -= len(content)
-        return list(reversed(selected))
+                message = {"role": role, "content": content}
+                display_content = item.get("display_content")
+                message_format = item.get("session_message_format")
+                if message_format == SESSION_REQUEST_MESSAGE_FORMAT:
+                    message["session_message_format"] = message_format
+                elif role == "user" and content.startswith("Current working directory:"):
+                    message["content"] = model_session_message_content(item)
+                elif isinstance(display_content, str) and display_content != content:
+                    message["display_content"] = display_content
+                normalized.append(message)
+        return normalized
 
     def _normalize_run_ids(self, run_ids: object) -> list[str]:
         if not isinstance(run_ids, list):
@@ -545,7 +674,7 @@ class SessionStore:
             if not last_assistant_message and item.get("role") == "assistant":
                 last_assistant_message = item.get("content", "")
             elif not last_user_prompt and item.get("role") == "user":
-                last_user_prompt = item.get("content", "")
+                last_user_prompt = display_session_message(item)
             if last_user_prompt and last_assistant_message:
                 break
 
@@ -616,13 +745,34 @@ class SessionStore:
 def _locked(path: Path) -> Iterator[None]:
     path.parent.mkdir(parents=True, exist_ok=True)
     handle = path.open("a+", encoding="utf-8")
+    acquired = False
     try:
-        if fcntl is not None:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        if fcntl is None and msvcrt is None:
+            raise RuntimeError("file locking is unavailable on this platform")
+        if fcntl is None:
+            handle.seek(0, os.SEEK_END)
+            if handle.tell() == 0:
+                handle.write("0")
+                handle.flush()
+            handle.seek(0)
+        while not acquired:
+            try:
+                if fcntl is not None:
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                else:
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                acquired = True
+            except (BlockingIOError, PermissionError):
+                time.sleep(0.1)
         yield
     finally:
-        if fcntl is not None:
-            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+        if acquired:
+            if fcntl is not None:
+                fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+            else:
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
         handle.close()
 
 

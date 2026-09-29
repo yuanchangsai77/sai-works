@@ -92,7 +92,7 @@ def create_app(
         and "write" in subagent_grant.allowed_effects
     )
     runtime_mode = "auto" if delegated_write and config.mode == "confirm" else config.mode
-    session_store = SessionStore()
+    session_store = SessionStore(max_message_chars=config.limits.prompt_context_chars)
     subagent_coordinator = SubagentCoordinator(
         session_store=session_store,
         cluster_store=SessionClusterStore(),
@@ -392,6 +392,7 @@ def main() -> None:
                             tool_results=[],
                             outcome="interrupted",
                         ),
+                        model_user_content=request.metadata.get("last_session_user_message"),
                         status="closed",
                         close_runtime=True,
                     )
@@ -401,6 +402,7 @@ def main() -> None:
                     resumed_session,
                     prompt,
                     summary,
+                    model_user_content=request.metadata.get("last_session_user_message"),
                     status="closed",
                     close_runtime=True,
                 )

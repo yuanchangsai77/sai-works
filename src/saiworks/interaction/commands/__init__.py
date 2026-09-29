@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from .base import SlashCommand, SlashCommandRegistry
 from .completions import complete_capabilities, complete_mode, complete_resume, complete_skill
-from .session_cmds import handle_compact, handle_reset, handle_resume
+from .session_cmds import handle_compact, handle_history, handle_reset, handle_resume
 from .sys_cmds import (
     handle_clear,
     handle_capabilities,
@@ -36,6 +36,7 @@ def default_slash_command_registry() -> SlashCommandRegistry:
     registry.register(SlashCommand(name="/reset", description="Reset conversation context memory", handler=handle_reset))
     registry.register(SlashCommand(name="/new", description="Start a fresh conversation context", handler=handle_reset))
     registry.register(SlashCommand(name="/compact", description="Compact and summarize conversation context", handler=handle_compact))
+    registry.register(SlashCommand(name="/history", description="List or view archived conversation history", usage="/history [archive_id]", handler=handle_history))
     registry.register(SlashCommand(name="/exit", description="Exit workbench session", handler=handle_exit))
     registry.register(SlashCommand(name="/quit", description="Exit workbench session", handler=handle_exit))
 

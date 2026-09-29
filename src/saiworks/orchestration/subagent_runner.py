@@ -23,6 +23,7 @@ class SubagentRuntime(Protocol):
         prompt: str,
         summary: ExecutionSummary,
         *,
+        model_user_content: str | None = None,
         status: str = "active",
         close_runtime: bool = False,
     ) -> None: ...
@@ -326,7 +327,14 @@ class SubagentRunner:
                     verifications=[],
                     artifact_refs=[],
                 )
-            runtime.persist_run(child, task, summary, status=state, close_runtime=True)
+            runtime.persist_run(
+                child,
+                task,
+                summary,
+                model_user_content=request.metadata.get("last_session_user_message"),
+                status=state,
+                close_runtime=True,
+            )
             return SubagentRunResult(
                 child.session_id,
                 state,
@@ -710,7 +718,14 @@ class SubagentRunner:
         persisted = False
         if runtime is not None:
             try:
-                runtime.persist_run(child, task, summary, status="failed", close_runtime=True)
+                runtime.persist_run(
+                    child,
+                    task,
+                    summary,
+                    model_user_content=request.metadata.get("last_session_user_message"),
+                    status="failed",
+                    close_runtime=True,
+                )
                 persisted = True
             except Exception:
                 persisted = False

@@ -1116,6 +1116,24 @@ class TUIConsolePresenter(ConsolePresenter):
         except ImportError:
             return [f"   {line}" for line in text.splitlines()]
 
+    def _render_dim_markdown_rows(self, text: str) -> list[str]:
+        try:
+            from rich.console import Console
+
+            buffer = StringIO()
+            output_is_terminal = bool(
+                getattr(self._output, "isatty", lambda: False)()
+            )
+            console = Console(
+                file=buffer,
+                width=max(_terminal_size(self._output).columns, 1),
+                force_terminal=output_is_terminal,
+            )
+            console.print(self._markdown_renderable(text, top_padding=0), style="dim")
+            return [*buffer.getvalue().rstrip("\n").splitlines(), ""]
+        except ImportError:
+            return [*[f"\033[90m   {line}\033[0m" for line in text.splitlines()], ""]
+
     def _publish(self, event: TUIEvent) -> None:
         self.controller.publish(event)
 
