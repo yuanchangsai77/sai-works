@@ -9,8 +9,8 @@
 - 新增 tool 时信息应该放在 `output`、`metadata` 还是 `summarizer`
 
 本文档不负责说明整体架构、roadmap 或 MCP/Skill 的专项模块拆分；那些内容分别在
-`docs/architecture.md`、`docs/roadmap.md`、`docs/extensions/mcp-integration.md`、
-`docs/extensions/skill-system.md` 中展开。
+`docs/architecture.md`、`docs/roadmap.md`、`docs/integrations/mcp.md`、
+`docs/integrations/skills.md` 中展开。
 
 本文档定义 `SaiWorks` tool 字段的用途和流向。新增内置 tool、Skill 派生 tool 或 MCP tool 适配层时，先按这里的契约决定信息应该放在哪里。
 

@@ -1,49 +1,31 @@
 # SaiWorks
 
-`SaiWorks` is an LLM-driven CLI workbench. The CLI itself does not own decision-making intelligence. It provides a controlled runtime that collects context, delegates reasoning to a large model, executes approved tools, and returns observable results to the user.
+SaiWorks is an execution-centric Agent Runtime / Harness designed for reliable, permission-aware and recoverable AI execution.
+
+The model proposes actions; SaiWorks checks constraints and permissions, executes capabilities, and records results and evidence. The current implementation primarily serves local coding tasks through CLI/TUI, with sessions, approval and recovery mechanisms. The broader Execution Platform is a target architecture, not a claim of completed capabilities.
 
 ## Architecture
 
-The project is organized around six layers:
+SaiWorks is the Execution Core in a **2 Core + 1 Shell + 1 Shared Trust Domain** architecture. Model Core evolves independently as the Intelligence Fabric. CLI, TUI and future Desktop/IDE/API interfaces are interaction shells; shared identity, access and connectivity semantics form the Trust Domain.
 
-1. Interaction layer: CLI entrypoints, user input, progress output, and result rendering.
-2. Session orchestration layer: task lifecycle, context assembly, and model/tool loop coordination.
-3. Model integration layer: prompt construction, model invocation, and structured response parsing.
-4. Tool execution layer: shell, file, git, search, and other callable capabilities.
-5. Safety layer: policy checks, confirmations, and execution boundaries.
-6. Observability layer: logs, events, trace records, and execution summaries.
-
-Detailed design is in [docs/architecture.md](docs/architecture.md).
+Current CLI/TUI share the execution engine, while some session and run coordination still lives in the CLI. A complete shell-independent Runtime interface remains an evolution goal.
 
 ## Documentation Map
 
-每类事实只指定一份主文档，其他文档只链接引用，避免分别维护同一份状态或契约。
-已完成计划不作为长期文档保留：稳定行为进入功能说明，未完成事项进入路线图，实施过程
-由 Git 历史追溯。
+[文档入口](docs/README.md)维护阅读路径、专题归属和状态说明。
 
-| 类型 | 主文档 | 唯一职责 | 不负责 |
-| --- | --- | --- | --- |
-| 使用入口 | 本文档 | 安装、运行、模型接入与常用命令 | 内部对象设计和实施计划 |
-| 当前架构 | [总体架构](docs/architecture.md) | runtime 分层、对象职责和当前数据流 | 专项行为和优先级 |
-| 当前功能 | [Agent 执行循环](docs/core/agent-loop.md) | 模型—工具循环、重复动作纠正和停止条件 | TUI 渲染和长任务 roadmap |
-| 当前功能 | [执行安全](docs/core/execution-safety.md) | 风险模式、审批、危险动作和写入内容检查 | Shell 隔离和工具字段定义 |
-| 当前功能 | [Subagent 会话集群](docs/core/subagent-session-clusters.md) | 子会话启动、attempt 生命周期、并发 runner 和结构化交付 | 远程 A2A transport |
-| 安全设计 | [审批代理与委托授权](docs/core/approval-delegation.md) | 后台审批阻塞、未来请求代理和可验证授权边界 | 用模型调用代替人工审批 |
-| 当前功能 | [项目感知](docs/core/project-awareness.md) | 项目规则、workspace 摘要、项目探测和测试命令解析 | 通用扩展接口 |
-| 配置参考 | [配置参考](docs/reference/configuration.md) | 配置来源、覆盖顺序、默认值和硬上限 | MCP 协议语义 |
-| 字段参考 | [工具契约](docs/reference/tool-contract.md) | Tool 定义、结果、metadata 和摘要的字段流向 | 工具实现教程 |
-| 扩展设计 | [运行时扩展](docs/extensions/runtime-interfaces.md) | ContextLoader、ToolProvider、ResourceProvider 通用边界 | MCP、Skill 的内部设计 |
-| 扩展设计 | [能力仓库](docs/extensions/capability-warehouse.md) | 工具箱、渐进披露、激活和回收策略 | transport 或 Skill 文件格式 |
-| 目标架构 | [未来平台蓝图](docs/future/README.md) | `SaiWorks`、模型网关与未来 Device Fabric 的跨项目边界、协议需求和演进方案 | 当前已实现行为和近期优先级 |
-| 专项设计 | [MCP 集成](docs/extensions/mcp-integration.md) | MCP transport、discovery、协议、安全和生命周期 | 全局 roadmap |
-| 专项设计 | [Skill 系统](docs/extensions/skill-system.md) | Skill 格式、来源、箱内资产及激活语义 | 通用仓库策略 |
-| 当前交互 | [TUI 当前行为](docs/interaction/tui-current.md) | 终端交互、输入编辑、重绘和兼容性边界 | runtime orchestration |
-| 交互路线图 | [TUI 路线图](docs/interaction/tui-roadmap.md) | TUI 未完成阶段和验收标准 | 当前交互细节和产品优先级 |
-| 当前功能 | [Shell 生命周期](docs/core/shell-session-lifecycle.md) | 串行 Bash 的保留、中断、清理和安全边界 | OS 级隔离 |
-| 总路线图 | [演进路线图](docs/roadmap.md) | 当前基线、未完成事项、优先级和验收标准 | 已完成施工历史和专项契约 |
-| 版本快照 | [v0.2](docs/versions/v0.2.md)、[v0.1](docs/versions/v0.1.md) | 发布时点的不可变能力记录 | 当前状态 |
+| 文档 | 职责 |
+| --- | --- |
+| [总体架构](docs/architecture.md) | 最新定位、目标责任和状态所有权 |
+| [当前实现](docs/implementation.md) | 已有机制、代码依据和目标差距 |
+| [演进路线](docs/roadmap.md) | 依赖、优先级和验收条件 |
+| [运行时机制](docs/runtime/README.md) | 执行、能力、授权、工作空间、证据与恢复 |
+| [接入机制](docs/integrations/README.md) | MCP、Skill、扩展点和模型调用侧边界 |
+| [交互壳](docs/interfaces/README.md) | 壳与内核边界、CLI/TUI 专项 |
+| [设计地图](docs/design/README.md) | 待实现设计、旧基线和探索材料 |
+| [配置参考](docs/reference/configuration.md) | 运行配置与环境变量 |
 
-建议阅读顺序：本文档 → 配置参考 → 总体架构 → 路线图；需要开发某个子系统时，再进入对应专题文档。
+使用从本页及配置参考开始；理解架构按“总体架构 → 当前实现 → 演进路线”阅读。目标设计不代替当前契约，版本与历史快照不代表最新实现状态。
 
 ## Project Layout
 
@@ -224,7 +206,7 @@ codes, and workspace-bounded path handling:
 
 - `list_dir`, `read_file`, `file_info`: read-only workspace file inspection
 - `workspace_open`: explicitly switch the active workspace directory for the current session
-  (see [session workspace lifecycle](docs/core/session-workspaces.md))
+  (see [session workspace lifecycle](docs/runtime/workspace.md))
 - `find_files`, `search_text`: bounded file and text search
 - `git_status`, `git_diff`: high-frequency read-only Git inspection
 - `shell_exec`: execute a command in the workspace
@@ -251,7 +233,7 @@ capabilities rather than defining whether a core tool exists.
 主进程。因此由该会话启动的普通后台子进程也会一并停止。超时后会立即重置为干净的
 Bash，后续命令继续在该新 Bash 中执行。
 完整的终止时机、并发边界和安全边界见
-[Shell 会话生命周期](docs/core/shell-session-lifecycle.md)。
+[Shell 会话生命周期](docs/runtime/shell.md)。
 
 这是一种进程生命周期管理机制，不是操作系统级沙盒：命令仍以启动 SaiWorks 的用户
 权限执行。对不可信代码或需要限制文件、网络和资源访问的任务，应在容器或系统级

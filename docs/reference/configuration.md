@@ -3,7 +3,7 @@
 ## 文档职责
 
 本文档是运行配置的唯一参考：说明配置文件位置、覆盖顺序、各参数的中文含义、默认值和内部硬上限。
-MCP 服务器字段的 transport 语义仍以 [MCP 集成](../extensions/mcp-integration.md) 为准。
+MCP 服务器字段的 transport 语义仍以 [MCP 集成](../integrations/mcp.md) 为准。
 
 ## 配置来源与优先级
 
@@ -141,7 +141,7 @@ SAIWORKS_MODE=confirm
 | `url` | `""` | HTTP/SSE transport 必填 URL。 |
 | `headers` | `{}` | HTTP/SSE 请求头。 |
 
-`risk_overrides` 的值只能是 `read`、`write`、`execute`、`test`、`network`、`destructive` 或 `confirm`。transport 的协议行为、安全边界和生命周期仍以 [MCP 集成](../extensions/mcp-integration.md) 为准。
+`risk_overrides` 的值只能是 `read`、`write`、`execute`、`test`、`network`、`destructive` 或 `confirm`。transport 的协议行为、安全边界和生命周期仍以 [MCP 集成](../integrations/mcp.md) 为准。
 
 每个 server 还支持以下环境变量覆盖，其中 `<NAME>` 是 server name 转成大写并将非字母数字字符替换为下划线：
 
