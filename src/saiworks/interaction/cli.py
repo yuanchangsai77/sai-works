@@ -7,9 +7,9 @@ except ImportError:
 
 from pathlib import Path
 
-from ..context.packager import ContextBudgetExceededError
 from ..sessions.messages import SESSION_REQUEST_MESSAGE_FORMAT
 from ..types import ExecutionSummary, SessionRecord, StoredSession, UserRequest, WorkspaceSessionState
+from ..runtime import Runtime
 from .presenter import ConsolePresenter
 
 
@@ -29,6 +29,7 @@ class CLI:
         subagent_runner=None,
         subagent_grant=None,
         command_registry: SlashCommandRegistry | None = None,
+        runtime: Runtime | None = None,
     ) -> None:
         self.engine = engine
         self.presenter = presenter
@@ -45,6 +46,13 @@ class CLI:
         if hasattr(self.presenter, "_composer"):
             self.presenter._composer.command_registry = self.command_registry
             self.presenter._composer.command_context = self
+        self.runtime = runtime or Runtime(
+            engine, logger, session_store, subagent_coordinator, subagent_runner, subagent_grant
+        )
+        self.presenter.runtime = self.runtime
+        self.runtime.on_run_started = self._show_run_started
+        self.runtime.on_run_finished = self._show_run_finished
+        self.runtime.on_run_interrupted = self._show_run_interrupted
         self.active_session = None
 
 
@@ -52,61 +60,10 @@ class CLI:
         return self._run_once(request)
 
     def run_background(self, request: UserRequest) -> ExecutionSummary:
-        """Execute without terminal rendering, for an isolated subagent worker."""
-        if self.subagent_grant is not None:
-            self._validate_subagent_grant(request)
-        if self.logger is not None:
-            self.logger.start_run(request)
-        try:
-            summary = self.engine.execute(request)
-        except Exception:
-            if self.logger is not None:
-                self.logger.record("run.error", {"message": "subagent execution failed"})
-            raise
-        if self.logger is not None and not request.metadata.get("defer_finalize"):
-            self.logger.finalize(request, summary)
-        return summary
+        return self.runtime.run_background(request)
 
     def _validate_subagent_grant(self, request: UserRequest) -> None:
-        grant = self.subagent_grant
-        if not grant.is_runner_issued():
-            raise RuntimeError("delegated subagent execution grant was not issued by the runner")
-        subagent = request.metadata.get("subagent")
-        if not isinstance(subagent, dict):
-            raise RuntimeError("delegated subagent request is missing its execution identity")
-        expected = {
-            "session_id": request.metadata.get("session_id"),
-            "cluster_id": subagent.get("cluster_id"),
-            "parent_session_id": subagent.get("parent_session_id"),
-            "attempt": subagent.get("attempt"),
-            "workspace_root": str(Path(request.cwd).resolve()),
-        }
-        actual = {
-            "session_id": grant.session_id,
-            "cluster_id": grant.cluster_id,
-            "parent_session_id": grant.parent_session_id,
-            "attempt": grant.attempt,
-            "workspace_root": str(Path(grant.workspace_root).resolve()),
-        }
-        if expected != actual:
-            raise RuntimeError("delegated subagent request does not match its execution grant")
-        contract = request.metadata.get("delegated_task")
-        if not isinstance(contract, dict):
-            raise RuntimeError("delegated subagent request is missing its task contract")
-        if frozenset(contract.get("allowed_effects", [])) != grant.allowed_effects:
-            raise RuntimeError("delegated subagent effects do not match the execution grant")
-        if tuple(contract.get("allowed_resources", [])) != grant.allowed_resources:
-            raise RuntimeError("delegated subagent resources do not match the execution grant")
-        if grant.task_id and contract.get("task_id") != grant.task_id:
-            raise RuntimeError("delegated subagent task id does not match the execution grant")
-        if grant.objective and (
-            request.prompt != grant.objective or contract.get("objective") != grant.objective
-        ):
-            raise RuntimeError("delegated subagent objective does not match the execution grant")
-        if grant.required_evidence and tuple(contract.get("required_evidence", [])) != grant.required_evidence:
-            raise RuntimeError("delegated subagent evidence contract does not match the execution grant")
-        if grant.approval_policy and contract.get("approval_policy") != grant.approval_policy:
-            raise RuntimeError("delegated subagent approval policy does not match the execution grant")
+        return self.runtime._validate_subagent_grant(request)
 
     def chat(
         self,
@@ -119,23 +76,9 @@ class CLI:
         conversation = list(conversation or [])
         session = None
         resumed = bool(conversation) or session_id is not None
-        if self.session_store is not None:
-            if session_id is not None:
-                session = self.session_store.load(session_id)
-            if session is None:
-                session = self.session_store.create(cwd=cwd, messages=conversation)
-            else:
-                self._ensure_workspace_state(session, cwd)
-                session.status = "active"
-                # A caller may have loaded its snapshot before another process
-                # compacted the session. The just-loaded store value is the
-                # authoritative context for this session ID.
-                self.session_store.save(session)
-                # The stored session is authoritative. A concurrent compaction
-                # may have replaced the messages while this process was starting.
-                conversation = list(session.messages)
-            self.prepare_session_runtime(session)
-            self.presenter.show_session_state(session, resumed=resumed, engine=self.engine)
+        session = self.runtime.open_session(cwd, conversation, session_id)
+        if session is not None:
+            self.presenter.show_session_state(session, resumed=resumed, engine=self.runtime.view())
             if resumed and hasattr(self.presenter, "show_session_history"):
                 self._show_session_history(session)
         self.active_session = session
@@ -149,7 +92,7 @@ class CLI:
             if prompt is None:
 
                 try:
-                    prompt = self.presenter.prompt_input(engine=self.engine)
+                    prompt = self.presenter.prompt_input(engine=self.runtime.view())
                 except KeyboardInterrupt:
                     print()
                     self._close_session(session, conversation)
@@ -166,7 +109,7 @@ class CLI:
             # Refresh before commands as well as model requests. A slash command
             # must not mark an old in-memory conversation as current.
             if session is not None and self.session_store is not None:
-                latest_session = self.session_store.load(session.session_id)
+                latest_session = self.runtime.load_session(session.session_id)
                 if (
                     latest_session is not None
                     and latest_session.context_generation > context_generation_applied
@@ -210,97 +153,11 @@ class CLI:
                     context_generation_applied = session.context_generation
                     continue
 
-            active_capability_ids = []
-            session_trace = []
-            resume_state = None
-            if session is not None:
-                active_capability_ids = getattr(session, "active_capability_ids", [])
-                session_trace = list(getattr(session, "trace", []))
-                trace_anchor = getattr(session, "context_trace_after_run_id", "")
-                if trace_anchor:
-                    anchor_index = next(
-                        (
-                            index
-                            for index, item in enumerate(session_trace)
-                            if getattr(item, "run_id", "") == trace_anchor
-                        ),
-                        None,
-                    )
-                    if anchor_index is not None:
-                        session_trace = session_trace[anchor_index + 1 :]
-                    else:
-                        # If the anchor was trimmed from the bounded trace list,
-                        # none of the remaining entries can be proven to belong
-                        # to the active compacted generation.
-                        session_trace = []
-                elif getattr(session, "context_generation", 0) > 0:
-                    session_trace = []
-                session_trace = session_trace[-6:]
-                resume_state = getattr(session, "resume_state", None)
-                if getattr(session, "context_generation", 0) > 0:
-                    if not trace_anchor:
-                        resume_state = None
-                    else:
-                        trace_ids = [getattr(item, "run_id", "") for item in session.trace]
-                        anchor_index = next(
-                            (index for index, run_id in enumerate(trace_ids) if run_id == trace_anchor),
-                            None,
-                        )
-                        resume_run_id = getattr(resume_state, "last_run_id", "")
-                        if anchor_index is None or resume_run_id in trace_ids[: anchor_index + 1]:
-                            resume_state = None
-
-            request = UserRequest(
-                prompt=prompt,
-                cwd=self._workspace_root(session, cwd),
-                metadata={
-                    "conversation": list(conversation),
-                    "session_id": session.session_id if session is not None else None,
-                    "active_capability_ids": list(active_capability_ids),
-                    "session_trace": session_trace,
-                    "resume_state": resume_state,
-                    "context_paths": list(context_paths or []),
-                    "workspace_state": getattr(session, "workspace_state", None),
-                },
-            )
+            request = self.runtime.build_session_request(prompt, cwd, session, conversation, context_paths)
             request_context_generation = getattr(session, "context_generation", 0)
-            if session is not None and self.session_store is not None:
-                # Reconcile immediately before execution, including when no run
-                # logger is configured.
-                self.session_store.save(session)
-                if session.context_generation > request_context_generation:
-                    conversation.clear()
-                    conversation.extend(session.messages)
-                    context_generation_applied = session.context_generation
-                    continue
-
-            if session is not None and self.logger is not None and self.session_store is not None:
-                # Start early so the run id can be attached to the session before execution.
-                # _run_once may call start_run again; the logger treats that as a no-op.
-                registered_skills = []
-                if hasattr(self.engine, "context_loaders"):
-                    for loader in self.engine.context_loaders:
-                        if hasattr(loader, "registry"):
-                            registered_skills = sorted(loader.registry._skills.keys())
-                            break
-                self.logger.start_run(request, registered_skills=registered_skills)
-                self._attach_last_run_id(session)
-                self.session_store.save(session)
-                if session.context_generation > request_context_generation:
-                    # Compaction won the race after prompt construction. Do not
-                    # execute a request built from the archived context.
-                    conversation.clear()
-                    conversation.extend(session.messages)
-                    context_generation_applied = session.context_generation
-                    self.logger.finalize(
-                        request,
-                        ExecutionSummary(
-                            final_message="Request refreshed after context compaction.",
-                            tool_results=[],
-                            outcome="interrupted",
-                        ),
-                    )
-                    continue
+            if not self.runtime.prepare_turn(session, request, request_context_generation, conversation):
+                context_generation_applied = getattr(session, "context_generation", 0)
+                continue
             try:
                 summary = self._execute_context_turn(
                     request,
@@ -311,25 +168,10 @@ class CLI:
                 )
                 if summary is None:
                     context_generation_applied = getattr(session, "context_generation", 0)
-                    if self.logger is not None:
-                        self.logger.finalize(
-                            request,
-                            ExecutionSummary(
-                                final_message="Request refreshed after context replacement.",
-                                tool_results=[],
-                                outcome="interrupted",
-                            ),
-                        )
+                    self.runtime.discard_prepared_turn(request)
                     continue
             except KeyboardInterrupt:
-                if session is not None:
-                    run_summary = getattr(self.logger, "last_run_summary", None)
-                    if run_summary is not None and all(item.run_id != run_summary.run_id for item in session.trace):
-                        session.trace.append(run_summary)
-                    self._attach_last_run_id(session)
-                    self.session_store.save(session)
-                    if session.cluster_id and self.subagent_coordinator is not None:
-                        self.subagent_coordinator.update_member_state(session, "cancelled")
+                self.runtime.save_interrupted_session(session)
                 prompt = None
                 continue
             prompt = None
@@ -340,34 +182,7 @@ class CLI:
         conversation: list[dict[str, str]],
         pending_request_content: str,
     ) -> bool:
-        store = self.session_store
-        if store is None:
-            return False
-        conversational_messages = [
-            item
-            for item in conversation
-            if item.get("role") in {"user", "assistant"}
-            and isinstance(item.get("content"), str)
-        ]
-        if len(conversational_messages) < 2:
-            return False
-
-        model = getattr(self.engine, "model", None)
-        profile = getattr(model, "capability_profile", None)
-        try:
-            model_budget = int(getattr(profile, "context_budget_chars", store.max_message_chars))
-        except (TypeError, ValueError):
-            model_budget = store.max_message_chars
-        active_budget = min(store.max_message_chars, max(1, model_budget))
-        threshold = int(active_budget * 0.75)
-        active_chars = sum(len(item["content"]) for item in conversational_messages)
-        active_chars += sum(
-            len(item.get("content", ""))
-            for item in conversation
-            if item.get("role") == "system" and isinstance(item.get("content"), str)
-        )
-        active_chars += len(pending_request_content)
-        if active_chars < threshold:
+        if not self.runtime.compaction_needed(conversation, pending_request_content):
             return False
 
         if not self._confirm_compaction(
@@ -384,7 +199,7 @@ class CLI:
         if hasattr(presenter, "_print"):
             presenter._print(f"\n[SaiWorks] {reason}")
         choice = presenter.prompt_box.read_selection(
-            engine=self.engine,
+            engine=self.runtime.view(),
             prompt="Choose an option [1-2]: ",
             options=("Compact now", "Continue without compacting"),
         )
@@ -406,129 +221,33 @@ class CLI:
         )
         return session.context_generation > previous_generation
 
-    def _execute_context_turn(
-        self,
-        request: UserRequest,
-        prompt: str,
-        session: StoredSession | None,
-        conversation: list[dict[str, str]],
-        context_generation: int,
-    ) -> ExecutionSummary | None:
-        store = self.session_store
-        if session is not None and store is not None:
-            with store.conversation_lock(session.session_id):
-                latest = store.load(session.session_id)
-                if latest is not None and (
-                    latest.context_generation != context_generation
-                    or latest.revision != session.revision
-                ):
-                    session.cwd = latest.cwd
-                    session.messages = list(latest.messages)
-                    session.run_ids = list(latest.run_ids)
-                    session.active_capability_ids = list(latest.active_capability_ids)
-                    session.trace = list(latest.trace)
-                    session.resume_state = latest.resume_state
-                    session.workspace_state = latest.workspace_state
-                    session.revision = latest.revision
-                    session.compaction_archive_ids = list(latest.compaction_archive_ids)
-                    session.context_generation = latest.context_generation
-                    session.context_trace_after_run_id = latest.context_trace_after_run_id
-                    conversation.clear()
-                    conversation.extend(session.messages)
-                    return None
-
-                if session.cluster_id and self.subagent_coordinator is not None:
-                    self.subagent_coordinator.update_member_state(session, "running")
-                summary = self._run_once(request)
-                self._append_turn_and_persist(
-                    request, prompt, summary, session, conversation, context_generation
-                )
-                if session.cluster_id and self.subagent_coordinator is not None:
-                    self.subagent_coordinator.update_member_state(
-                        session, self._cluster_state_for_outcome(summary.outcome)
-                    )
-                return summary
-
-        return self._run_once(request)
+    def _execute_context_turn(self, request, prompt, session, conversation, context_generation):
+        return self.runtime.execute_session_turn(request, prompt, session, conversation, context_generation)
 
     def _append_turn_and_persist(
-        self,
-        request: UserRequest,
-        prompt: str,
-        summary: ExecutionSummary,
-        session: StoredSession | None,
-        conversation: list[dict[str, str]],
-        context_generation: int,
+        self, request, prompt, summary, session, conversation, context_generation,
     ) -> None:
-        previous_stored_chars = sum(
-            len(str(item.get("content", "")))
-            for item in session.messages
-            if isinstance(item, dict)
-        ) if session is not None else 0
-        model_user_message = request.metadata.get("last_session_user_message")
-        user_message = {
-            "role": "user",
-            "content": model_user_message if isinstance(model_user_message, str) else prompt,
-        }
-        if isinstance(model_user_message, str):
-            user_message["session_message_format"] = SESSION_REQUEST_MESSAGE_FORMAT
-        conversation.extend([user_message, {"role": "assistant", "content": summary.final_message}])
-        if session is None or self.session_store is None:
-            return
-
-        session.messages = list(conversation)
-        self._apply_workspace_summary(session, summary)
-        session.status = "active"
-        session.active_capability_ids = list(getattr(summary, "active_capability_ids", []))
-        run_summary = getattr(self.logger, "last_run_summary", None)
-        if run_summary is not None and all(item.run_id != run_summary.run_id for item in session.trace):
-            session.trace.append(run_summary)
-        self._attach_last_run_id(session)
-        session.context_generation = context_generation
-        self.session_store.save(session)
-        stored_chars = sum(
-            len(str(item.get("content", "")))
-            for item in session.messages
-            if isinstance(item, dict)
-        )
-        if (
-            previous_stored_chars <= self.session_store.max_message_chars
-            < stored_chars
-            and self.presenter
-            and hasattr(self.presenter, "_print")
-        ):
+        previous_chars = sum(len(str(item.get("content", ""))) for item in session.messages) if session else 0
+        self.runtime.append_turn_and_persist(request, prompt, summary, session, conversation, context_generation)
+        stored_chars = sum(len(str(item.get("content", ""))) for item in session.messages) if session else 0
+        if (self.session_store is not None and previous_chars <= self.session_store.max_message_chars < stored_chars
+                and self.presenter and hasattr(self.presenter, "_print")):
             self.presenter._print(
                 "\n[SaiWorks] Session storage budget exceeded. The complete latest turn "
                 "was saved; choose whether to compact before the next request.\n"
             )
-        if session.context_generation > context_generation:
-            conversation.clear()
-            conversation.extend(session.messages)
 
     def list_sessions(self) -> list[SessionRecord]:
-        if self.session_store is None:
-            return []
-        return self.session_store.list_sessions()
+        return self.runtime.list_sessions()
 
     def load_session(self, session_id: str) -> StoredSession | None:
-        if self.session_store is None:
-            return None
-        return self.session_store.load(session_id)
+        return self.runtime.load_session(session_id)
 
     def prepare_session_runtime(self, session: StoredSession | None) -> None:
-        if session is None:
-            return
-        prepare = getattr(self.engine, "prepare_session_state", None)
-        if callable(prepare):
-            prepare(
-                session.session_id,
-                getattr(session, "active_capability_ids", []),
-            )
+        return self.runtime.prepare_session_runtime(session)
 
     def latest_session(self) -> StoredSession | None:
-        if self.session_store is None:
-            return None
-        return self.session_store.latest()
+        return self.runtime.latest_session()
 
     def persist_run(
         self,
@@ -540,89 +259,17 @@ class CLI:
         status: str = "active",
         close_runtime: bool = False,
     ) -> None:
-        if self.session_store is None:
-            return
-        # Normal foreground runs are finalized by _run_once. Background subagents
-        # deliberately defer that step until the runner has validated the final
-        # outcome, leaving the logger's run open here.
-        if self.logger is not None and getattr(self.logger, "run_dir", None) is not None:
-            request = UserRequest(
-                prompt=prompt,
-                cwd=session.cwd,
-                metadata={"session_id": session.session_id},
-            )
-            self.logger.finalize(request, summary)
-        user_message = {
-            "role": "user",
-            "content": model_user_content if isinstance(model_user_content, str) else prompt,
-        }
-        if isinstance(model_user_content, str):
-            user_message["session_message_format"] = SESSION_REQUEST_MESSAGE_FORMAT
-        session.messages.extend([user_message, {"role": "assistant", "content": summary.final_message}])
-        session.status = status
-        session.active_capability_ids = list(
-            getattr(summary, "active_capability_ids", [])
-        )
-        self._apply_workspace_summary(session, summary)
-        run_summary = getattr(self.logger, "last_run_summary", None)
-        if run_summary is not None and all(item.run_id != run_summary.run_id for item in session.trace):
-            session.trace.append(run_summary)
-        self._attach_last_run_id(session)
-        try:
-            self.session_store.save(session)
-            if (
-                session.session_role == "primary"
-                and session.cluster_id
-                and self.subagent_coordinator is not None
-            ):
-                self.subagent_coordinator.update_member_state(
-                    session,
-                    self._cluster_state_for_outcome(summary.outcome),
-                )
-            if status == "closed":
-                self._print_exit_info(session)
-        finally:
-            if close_runtime:
-                tools = getattr(self.engine, "tools", None)
-                reset_state = getattr(tools, "reset_state", None)
-                if callable(reset_state):
-                    reset_state()
+        self.runtime.persist_run(session, prompt, summary, model_user_content=model_user_content, status=status, close_runtime=close_runtime)
+        if status == "closed" and self.session_store is not None:
+            self._print_exit_info(session)
 
-    @staticmethod
-    def _apply_workspace_summary(session, summary) -> None:
-        state = getattr(summary, "workspace_state", None)
-        if isinstance(state, WorkspaceSessionState) and state.active_root:
-            session.workspace_state = state
-            session.cwd = state.active_root
+    _apply_workspace_summary = staticmethod(Runtime._apply_workspace_summary)
 
-    @staticmethod
-    def _workspace_root(session: StoredSession | None, fallback: str) -> str:
-        state = getattr(session, "workspace_state", None)
-        if isinstance(state, WorkspaceSessionState) and state.active_root:
-            return state.active_root
-        return fallback
+    _workspace_root = staticmethod(Runtime._workspace_root)
 
-    @staticmethod
-    def _ensure_workspace_state(session: StoredSession, fallback: str) -> None:
-        state = getattr(session, "workspace_state", None)
-        if not isinstance(state, WorkspaceSessionState):
-            session.workspace_state = WorkspaceSessionState(
-                origin_root=session.cwd or fallback,
-                active_root=session.cwd or fallback,
-            )
-            return
-        state.origin_root = state.origin_root or session.cwd or fallback
-        state.active_root = state.active_root or session.cwd or fallback
+    _ensure_workspace_state = staticmethod(Runtime._ensure_workspace_state)
 
-    @staticmethod
-    def _cluster_state_for_outcome(outcome: str) -> str:
-        if outcome == "completed":
-            return "completed"
-        if outcome in {"blocked", "stalled", "exhausted"}:
-            return "blocked"
-        if outcome in {"interrupted", "cancelled"}:
-            return "cancelled"
-        return "failed"
+    _cluster_state_for_outcome = staticmethod(Runtime._cluster_state_for_outcome)
 
     def choose_session(self, prompt: str = "Select a session to resume") -> StoredSession | None:
         sessions = self.list_sessions()
@@ -833,7 +480,7 @@ class CLI:
 
         selected_session: StoredSession | None = None
         if target_id:
-            selected_session = self.session_store.load(target_id)
+            selected_session = self.runtime.load_session(target_id)
             if selected_session is None:
                 if self.presenter and hasattr(self.presenter, "_print"):
                     self.presenter._print(f"[SaiWorks] session '{target_id}' not found")
@@ -844,14 +491,14 @@ class CLI:
         if selected_session is not None:
             if current_session is not None and conversation is not None:
                 current_session.messages = list(conversation)
-                self.session_store.save(current_session)
+                self.runtime.save_session(current_session)
             if conversation is not None:
                 conversation.clear()
                 conversation.extend(selected_session.messages)
             self.active_session = selected_session
             self.prepare_session_runtime(selected_session)
             if self.presenter:
-                self.presenter.show_session_state(selected_session, resumed=True, engine=self.engine)
+                self.presenter.show_session_state(selected_session, resumed=True, engine=self.runtime.view())
                 if hasattr(self.presenter, "show_session_history"):
                     self._show_session_history(selected_session)
         return selected_session
@@ -860,7 +507,7 @@ class CLI:
         messages: list[dict[str, str]] = []
         if self.session_store is not None:
             for archive_id in session.compaction_archive_ids:
-                archived = self.session_store.load_archived_messages(
+                archived = self.runtime.load_archived_messages(
                     session.session_id, archive_id
                 )
                 if archived is None:
@@ -877,139 +524,30 @@ class CLI:
 
 
     def _run_once(self, request: UserRequest) -> ExecutionSummary:
+        return self.runtime.execute(request)
 
-        if self.logger is not None:
-            registered_skills = []
-            if hasattr(self.engine, "context_loaders"):
-                for loader in self.engine.context_loaders:
-                    if hasattr(loader, "registry"):
-                        registered_skills = sorted(loader.registry._skills.keys())
-                        break
-            self.logger.start_run(request, registered_skills=registered_skills)
+    def _show_run_started(self, request) -> None:
         self.presenter.show_start(request)
-        try:
-            self.presenter.show_status_bar(engine=self.engine, is_running=True)
-            summary = self.engine.execute(request)
-            self.presenter.clear_running_status_bar(len(summary.tool_results))
-        except KeyboardInterrupt:
-            tools_count = 0
-            interrupted_results = []
-            if hasattr(self.engine, "current_session") and self.engine.current_session:
-                tools_count = len(self.engine.current_session.tool_results)
-                interrupted_results = list(self.engine.current_session.tool_results)
-            cancel_run = getattr(self.engine, "cancel_current_run", None)
-            if callable(cancel_run):
-                cancel_run()
-            else:
-                tools = getattr(self.engine, "tools", None)
-                reset_state = getattr(tools, "reset_state", None)
-                if callable(reset_state):
-                    reset_state()
-            self.presenter.clear_running_status_bar(tools_count)
-            self.presenter.show_interrupted()
-            interrupted_summary = ExecutionSummary(
-                final_message="Interrupted",
-                tool_results=interrupted_results,
-                outcome="interrupted",
-            )
-            if hasattr(self.engine, "_finish"):
-                self.engine._finish(interrupted_summary)
-            if self.active_session is not None:
-                self._apply_workspace_summary(self.active_session, interrupted_summary)
-            if self.logger is not None:
-                self.logger.record("run.interrupted", {"tool_count": tools_count})
-                self.logger.finalize(request, interrupted_summary)
-            raise KeyboardInterrupt
-        except RuntimeError as error:
-            partial = getattr(self.engine, "last_failure_summary", None)
-            if isinstance(error, ContextBudgetExceededError):
-                summary = ExecutionSummary(
-                    final_message=str(error), tool_results=[], outcome="runtime_error"
-                )
-            elif isinstance(partial, ExecutionSummary):
-                summary = partial
-            else:
-                summary = ExecutionSummary(
-                    final_message=(
-                        "Model API is unavailable right now. "
-                        f"{error}. You can keep this session open and try again later."
-                    ),
-                    tool_results=[],
-                    outcome="runtime_error",
-                )
-            self.presenter.clear_running_status_bar(len(summary.tool_results))
-            if self.logger is not None:
-                self.logger.record("run.error", {"message": str(error)})
+        self.presenter.show_status_bar(engine=self.runtime.view(), is_running=True)
+
+    def _show_run_finished(self, summary) -> None:
+        self.presenter.clear_running_status_bar(len(summary.tool_results))
         self.presenter.show_summary(summary)
-        if self.logger is not None:
-            self.logger.finalize(request, summary)
-        return summary
+
+    def _show_run_interrupted(self, summary) -> None:
+        self.presenter.clear_running_status_bar(len(summary.tool_results))
+        self.presenter.show_interrupted()
+        if self.active_session is not None:
+            self._apply_workspace_summary(self.active_session, summary)
 
     def _close_session(self, session, conversation: list[dict[str, str]]) -> None:
-        try:
-            if session is not None and self.session_store is not None:
-                session.status = "closed"
-                run_summary = getattr(self.logger, "last_run_summary", None)
-                if run_summary is not None and all(item.run_id != run_summary.run_id for item in session.trace):
-                    session.trace.append(run_summary)
-                self._attach_last_run_id(session)
-                session.messages = list(conversation)
-                self.session_store.save(session)
-                self._print_exit_info(session)
-            else:
-                self._print_exit_info(None)
-        finally:
-            tools = getattr(self.engine, "tools", None)
-            reset_state = getattr(tools, "reset_state", None)
-            if callable(reset_state):
-                reset_state()
+        self.runtime.close_session(session, conversation)
+        self._print_exit_info(session)
 
     def _print_exit_info(self, session: StoredSession | None) -> None:
-        import json
-        from pathlib import Path
-
-        prompt_tokens = 0
-        completion_tokens = 0
-        total_tokens = 0
-        has_usage = False
-
-        if session is not None and self.logger is not None and getattr(self.logger, "base_dir", None) is not None:
-            run_ids = list(session.run_ids)
-            current_run_id = getattr(self.logger, "run_id", None)
-            if current_run_id and current_run_id not in run_ids:
-                run_ids.append(current_run_id)
-
-            for run_id in run_ids:
-                run_dir = Path(self.logger.base_dir) / run_id
-                events_file = run_dir / "events.jsonl"
-                if events_file.exists():
-                    try:
-                        with events_file.open("r", encoding="utf-8") as f:
-                            for line in f:
-                                if not line.strip():
-                                    continue
-                                event = json.loads(line)
-                                if event.get("name") == "model.response":
-                                    payload = event.get("payload", {})
-                                    usage = payload.get("usage")
-                                    if isinstance(usage, dict):
-                                        try:
-                                            prompt_tokens += int(usage.get("prompt_tokens", 0))
-                                            has_usage = True
-                                        except (ValueError, TypeError):
-                                            pass
-                                        try:
-                                            completion_tokens += int(usage.get("completion_tokens", 0))
-                                            has_usage = True
-                                        except (ValueError, TypeError):
-                                            pass
-                                        try:
-                                            total_tokens += int(usage.get("total_tokens", 0))
-                                            has_usage = True
-                                        except (ValueError, TypeError):
-                                            pass
-                    except Exception:
-                        pass
+        usage = self.runtime.session_usage(session)
+        prompt_tokens, completion_tokens = usage["prompt_tokens"], usage["completion_tokens"]
+        total_tokens, has_usage = usage["total_tokens"], usage["has_usage"]
 
         CYAN = "\033[1;36m"
         GREEN = "\033[1;32m"
@@ -1034,6 +572,4 @@ class CLI:
         print()
 
     def _attach_last_run_id(self, session: StoredSession) -> None:
-        run_id = getattr(self.logger, "last_run_id", None)
-        if isinstance(run_id, str) and run_id and run_id not in session.run_ids:
-            session.run_ids.append(run_id)
+        return self.runtime._attach_last_run_id(session)

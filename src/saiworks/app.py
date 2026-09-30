@@ -10,9 +10,6 @@ from .capabilities.tools import build_warehouse_tools
 from .capabilities.warehouse import CapabilityWarehouse
 from .config import load_dotenv, load_runtime_config
 from .context import ExplicitContextLoader, ProjectRulesLoader, WorkspaceSummaryLoader
-from .interaction.cli import CLI
-from .interaction.presenter import ConsolePresenter
-from .interaction.tui import TUIConsolePresenter, should_use_tui
 from .intent import RequestIntentClassifier
 from .mcp.client import TransportBackedMCPClient, UnsupportedMCPClient
 from .mcp.discovery import MCPDiscoveryService
@@ -33,6 +30,8 @@ from .sessions import SessionClusterStore, SessionImageStore, SessionStore
 from .tools.builtin_provider import BuiltinToolProvider
 from .tools.registry import ToolRegistry
 from .skills.registry import SkillRegistry
+from .runtime import Runtime
+from .sessions.tasks import TaskStore
 from .types import ExecutionSummary, UserRequest
 from pathlib import Path
 
@@ -75,15 +74,16 @@ def create_model_client(
     )
 
 
-def create_app(
+def create_runtime(
     mode: str | None = None,
     workspace_root: str | Path | None = None,
     *,
-    interactive: bool = False,
     background: bool = False,
     subagent_grant: SubagentExecutionGrant | None = None,
     model_stream: bool | None = None,
-) -> CLI:
+    _logger=None,
+    _task_store_enabled: bool = True,
+) -> Runtime:
     root = Path(workspace_root or os.getcwd()).resolve()
     config = load_runtime_config(mode=mode, cwd=root)
     delegated_write = (
@@ -100,14 +100,14 @@ def create_app(
     )
     subagent_runner = SubagentRunner(
         coordinator=subagent_coordinator,
-        runtime_factory=lambda session, grant: create_app(
+        runtime_factory=lambda session, grant: create_runtime(
             mode=config.mode,
             workspace_root=session.cwd,
             background=True,
             subagent_grant=grant,
         ),
     )
-    logger = InMemoryLogger()
+    logger = _logger or InMemoryLogger()
     policy = DefaultPolicy(
         mode=runtime_mode,
         allowed_effects=(set(subagent_grant.allowed_effects) if subagent_grant is not None else None),
@@ -210,8 +210,6 @@ def create_app(
         timeout=config.orchestration.subagent_model_timeout if background else None,
         stream=model_stream,
     )
-    presenter_type = TUIConsolePresenter if interactive and should_use_tui() else ConsolePresenter
-    presenter = presenter_type(tool_result_summarizer=tools.summarize_result)
     engine = ExecutionEngine(
         model=model,
         tools=tools,
@@ -223,8 +221,8 @@ def create_app(
             else [project_rules_loader, workspace_summary_loader, explicit_context_loader]
         ),
         capability_warehouse=capability_warehouse,
-        approval_callback=None if background else presenter.confirm_tool_action,
-        progress_reporter=None if background else presenter,
+        approval_callback=None,
+        progress_reporter=None,
         max_model_retries=(
             min(
                 config.model_retry.max_retries,
@@ -253,16 +251,51 @@ def create_app(
         )
     # Store skills registry on engine for CLI visibility
     engine.skills_registry = skills_registry
-    presenter.engine = engine
-
-    return CLI(
+    runtime = Runtime(
         engine=engine,
-        presenter=presenter,
         logger=logger,
         session_store=session_store,
         subagent_coordinator=subagent_coordinator,
         subagent_runner=subagent_runner,
         subagent_grant=subagent_grant,
+        task_store=TaskStore(root / ".saiworks" / "tasks.sqlite3") if _task_store_enabled else None,
+    )
+
+    runtime.execution_factory = lambda: create_runtime(
+        mode=mode, workspace_root=root, background=background, subagent_grant=subagent_grant,
+        model_stream=model_stream, _logger=logger, _task_store_enabled=False,
+    ).engine
+    return runtime
+
+
+def create_app(
+    mode: str | None = None,
+    workspace_root: str | Path | None = None,
+    *,
+    interactive: bool = False,
+    background: bool = False,
+    subagent_grant: SubagentExecutionGrant | None = None,
+    model_stream: bool | None = None,
+):
+    """Compatibility shell factory; headless clients use create_runtime."""
+    from .interaction.cli import CLI
+    from .interaction.presenter import ConsolePresenter
+    from .interaction.tui import TUIConsolePresenter, should_use_tui
+
+    runtime = create_runtime(mode, workspace_root, background=background,
+                             subagent_grant=subagent_grant, model_stream=model_stream)
+    presenter_type = TUIConsolePresenter if interactive and should_use_tui() else ConsolePresenter
+    presenter = presenter_type(tool_result_summarizer=runtime.engine.tools.summarize_result)
+    presenter.engine = runtime.view()
+    runtime.on_tools_changed = lambda tools: setattr(presenter, "tool_result_summarizer", tools.summarize_result)
+    if not background:
+        runtime.engine.approval_callback = presenter.confirm_tool_action
+        runtime.engine.progress_reporter = presenter
+    return CLI(
+        engine=runtime.engine, presenter=presenter, logger=runtime.logger,
+        session_store=runtime.session_store, subagent_coordinator=runtime.subagent_coordinator,
+        subagent_runner=runtime.subagent_runner, subagent_grant=runtime.subagent_grant,
+        runtime=runtime,
     )
 
 
@@ -387,12 +420,10 @@ def main() -> None:
                     app.persist_run(
                         resumed_session,
                         prompt,
-                        ExecutionSummary(
-                            final_message="Interrupted",
-                            tool_results=[],
-                            outcome="interrupted",
-                        ),
-                        model_user_content=request.metadata.get("last_session_user_message"),
+                        getattr(getattr(app, "runtime", None), "last_summary", None)
+                        or ExecutionSummary(final_message="Interrupted", tool_results=[], outcome="interrupted"),
+                        **({"model_user_content": request.metadata["last_session_user_message"]}
+                           if isinstance(request.metadata.get("last_session_user_message"), str) else {}),
                         status="closed",
                         close_runtime=True,
                     )
@@ -402,7 +433,8 @@ def main() -> None:
                     resumed_session,
                     prompt,
                     summary,
-                    model_user_content=request.metadata.get("last_session_user_message"),
+                    **({"model_user_content": request.metadata["last_session_user_message"]}
+                           if isinstance(request.metadata.get("last_session_user_message"), str) else {}),
                     status="closed",
                     close_runtime=True,
                 )

@@ -150,8 +150,10 @@ class SubagentRunner:
         for session_id in candidates:
             runtime = active.get(session_id)
             if runtime is not None:
-                engine = getattr(runtime, "engine", None)
-                cancel = getattr(engine, "cancel_current_run", None)
+                cancel = getattr(runtime, "cancel_current_run", None)
+                if not callable(cancel):
+                    engine = getattr(runtime, "engine", None)
+                    cancel = getattr(engine, "cancel_current_run", None)
                 if callable(cancel):
                     cancel()
             cluster = self.coordinator.cluster_store.load(cluster_id)
@@ -358,6 +360,7 @@ class SubagentRunner:
                 member=member,
                 runtime=runtime,
                 error=error,
+                model_user_content=request.metadata.get("last_session_user_message"),
                 expected_states=frozenset({"running", "completed", "blocked"}),
             )
         finally:
@@ -646,6 +649,7 @@ class SubagentRunner:
         member=None,
         runtime: SubagentRuntime | None = None,
         error: BaseException | None = None,
+        model_user_content: str | None = None,
         expected_states: frozenset[str] = frozenset({"running"}),
     ) -> SubagentRunResult:
         summary_text = _bounded_summary(message)
@@ -722,7 +726,7 @@ class SubagentRunner:
                     child,
                     task,
                     summary,
-                    model_user_content=request.metadata.get("last_session_user_message"),
+                    **({"model_user_content": model_user_content} if isinstance(model_user_content, str) else {}),
                     status="failed",
                     close_runtime=True,
                 )

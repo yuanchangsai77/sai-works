@@ -4,9 +4,9 @@
 
 ## 当前事实
 
-应用装配返回 CLI 对象。CLI 与 TUI 复用执行引擎，TUI 通过展示层适配。运行进度已有独立抽象；审批通过展示层确认回调连接。会话选择、恢复协调、持久化入口及部分后台执行逻辑仍在 CLI 中。
+应用提供无终端的 Runtime 装配，现有应用入口继续返回 CLI 适配。CLI/TUI 调用 Runtime 协调运行、会话、压缩、能力和政策；显示与补全消费脱离内核可变对象的查询投影。运行进度复用既有抽象；审批仍通过同步回调适配。子代理工厂直接装配独立 Runtime。
 
-因此已有共用机制，但没有完整的、可独立供 Desktop/IDE/API 使用的 Runtime 门面。已有 ContextLoader、ToolProvider、ResourceProvider 属于接入扩展点，不是这里讨论的交互控制边界。
+已具备同进程无终端门面、单执行槽、任务接受与结果查询；跨进程 Desktop/IDE/API 的身份、可恢复审批与 revision 同步尚未实现。已有 ContextLoader、ToolProvider、ResourceProvider 属于接入扩展点，不是这里讨论的交互控制边界。
 
 ## 交互职责地图
 

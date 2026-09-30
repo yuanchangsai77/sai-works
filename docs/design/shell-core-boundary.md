@@ -4,7 +4,7 @@
 - 状态：首版行为决策已确认，待实施与验证；不是已发布接口契约。
 - 范围：TUI/CLI 解耦、未来 Companion、薄 Gateway 与两核的边界。
 - 原则：Contract first 不等于 Schema first；先确定行为、权威状态和故障语义。
-- 本轮不改变代码、字段、错误码、存储格式或已生效接口。后续契约变更必须说明影响并确认。
+- 本设计不发布网络接口。B/C 已按确认后的独立接受记录契约实施；具体实现见阶段核对。后续契约变更必须说明影响并确认。
 
 ## 1. 目标与非目标
 
@@ -12,9 +12,9 @@
 
 第一版不实现 Mobile、Voice、被动屏幕监控、远程设备调度或完整 Agent OS。不预设 HTTP、WebSocket 或 RPC，不为了统一让同进程客户端强制走网络。暂停/恢复不在首轮产品承诺中。
 
-## 2. 已核对的现状
+## 2. 拆分前已核对的现状（历史基线）
 
-源码位置：`/home/changsai/testcode`（SaiWorks）；Model Core 当前实现位于相邻的 `/home/changsai/test` 仓库。以下来自静态代码与文档核对，未运行 SaiWorks 行为测试。
+源码位置：`/home/changsai/testcode`（SaiWorks）；Model Core 当前实现位于相邻的 `/home/changsai/test` 仓库。本节保留拆分前的静态源码核对事实；拆分后的实现与测试证据见[阶段核对](shell-core-audit.md)。
 
 SaiWorks 已有 [壳与内核边界](../interfaces/runtime-boundary.md)、[系统协议边界](protocol-boundaries.md)和 [TUI 说明](../interfaces/tui.md)。本草案补充它们尚未展开的常驻、同步与迁移语义，不替代现行领域契约。跨仓库相对链接依赖当前并列目录布局。
 

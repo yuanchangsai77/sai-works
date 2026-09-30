@@ -141,7 +141,7 @@ def test_run_returns_message_when_model_request_fails(tmp_path, monkeypatch):
     def fail(_request):
         raise RuntimeError("Model request failed: [Errno 111] Connection refused")
 
-    monkeypatch.setattr(app.engine, "execute", fail)
+    monkeypatch.setattr(app.engine, "execute_in_context", lambda request, context: fail(request))
 
     summary = app.run(UserRequest(prompt="inspect workspace", cwd=str(tmp_path)))
 
@@ -2800,9 +2800,9 @@ def test_chat_persists_and_closes_session(tmp_path, monkeypatch):
     answers = iter(["hello", "quit"])
     monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
     monkeypatch.setattr(
-        cli,
-        "_run_once",
-        lambda request: type("Summary", (), {"final_message": f"echo:{request.prompt}", "tool_results": []})(),
+        cli.runtime,
+        "execute",
+        lambda request, **options: type("Summary", (), {"final_message": f"echo:{request.prompt}", "tool_results": []})(),
     )
 
     cli.chat(cwd=str(tmp_path))
@@ -3419,7 +3419,7 @@ def test_logger_summary_keeps_requested_action_when_preflight_skips_execution(tm
     assert turn.tool_results == ["read_file:path_not_found"]
 
 
-def test_session_store_persists_bounded_recovery_snapshot(tmp_path):
+def test_session_store_preserves_full_messages_and_bounded_recovery_snapshot(tmp_path):
     store = SessionStore(base_dir=tmp_path)
     session = store.create(cwd=str(tmp_path))
     session.messages = [
@@ -3447,7 +3447,9 @@ def test_session_store_persists_bounded_recovery_snapshot(tmp_path):
     loaded = store.load(session.session_id)
 
     assert loaded is not None
-    assert len(loaded.messages) == 40
+    assert len(loaded.messages) == 60
+    assert loaded.messages[0]["content"] == "message-0"
+    assert loaded.messages[-1]["content"] == "message-59"
     assert len(loaded.run_ids) == 30
     assert len(loaded.trace) == 24
     assert "checkpoint" not in payload["trace"][-1]

@@ -867,7 +867,11 @@ class ConsolePresenter:
             self._print(f"{RED}Error:{RESET} Invalid mode '{mode_arg}'. Use readonly, confirm, or auto.\n")
             return
             
-        policy.mode = mode_arg
+        runtime = getattr(self, "runtime", None)
+        if runtime is None:
+            self._print("Runtime policy configuration is not available.\n")
+            return
+        runtime.safety_mode(mode_arg)
         self._print(f"Safety mode successfully updated to: {BOLD}{mode_arg}{RESET}\n")
 
     def show_input_border(self) -> None:

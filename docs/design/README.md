@@ -8,8 +8,10 @@
 | [授权交互](approval.md) | 多壳、后台与跨会话审批关联及有效性 | 同步确认回调、后台阻塞 |
 | [执行目标](execution-targets.md) | 目标约束、远程节点、容量、租约与故障协调 | 本地 Executor 与 MCP 适配 |
 | [执行账本](execution-ledger.md) | 授权、执行、证据和检查点的可查询关系 | 日志、trace 与检查点 |
-| [壳与内核边界设计](shell-core-boundary.md) | 权威状态、生命周期、上下文绑定与多壳同步 | 首版行为决策已确认，待提取运行职责 |
-| [壳与内核拆分实施计划](shell-core-migration.md) | 能力映射、职责迁移、阶段验收和兼容策略 | 文档先行，未实施重构 |
+| [壳与内核边界设计](shell-core-boundary.md) | 权威状态、生命周期、上下文绑定与多壳同步 | 首版行为决策已确认，B/C 运行职责已提取 |
+| [壳与内核拆分实施计划](shell-core-migration.md) | 能力映射、职责迁移、阶段验收和兼容策略 | A 核对完成，B/C 主体迁移完成但验收未闭合；D/E/F 待实施 |
+| [持久化接受契约](../reference/runtime-acceptance.md) | 内部提交身份、接受事务与独立任务记录 | 已确认并实施，旧会话格式不变 |
+| [同步与审批契约提案](runtime-sync-approval-contract.md) | revision、审批有效性、continuation 与控制资格 | 待确认，未实施 |
 | [协议边界](protocol-boundaries.md) | 哪些边界需要协议及其兼容要求 | 已有模型和工具契约 |
 | [探索范围](exploration.md) | 经验偏好、非 Coding 场景与连续认知的研究位置 | 不作为当前实现或契约 |
 

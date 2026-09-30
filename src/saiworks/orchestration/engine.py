@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import threading
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 from uuid import uuid4
@@ -30,6 +31,18 @@ from .progress import (
 )
 from .session import SessionContext
 from .control import CompletionPolicy, RunBudgetPolicy
+
+
+@dataclass(slots=True)
+class ExecutionContext:
+    """Run-local cancellation and terminal state, never reused by another run."""
+
+    task_id: str = ""
+    tools: object | None = None
+    cancellation: threading.Event = field(default_factory=threading.Event)
+    session: SessionContext | None = None
+    tools_closed: bool = False
+    terminal_summary: ExecutionSummary | None = None
 
 
 class ExecutionEngine:
@@ -120,37 +133,62 @@ class ExecutionEngine:
         self.max_duplicate_skips = 3
         self._tool_state_session_key: str | None = None
         self._keep_tool_state = False
-        self._runtime_cancelled = False
-        self._cancel_event = threading.Event()
+        self._execution_context = ExecutionContext()
+        self._execution_lock = threading.Lock()
         self.last_failure_summary: ExecutionSummary | None = None
         self.current_session: SessionContext | None = None
 
+    @property
+    def current_session(self) -> SessionContext | None:
+        return self._execution_context.session
+
+    @current_session.setter
+    def current_session(self, value: SessionContext | None) -> None:
+        self._execution_context.session = value
+
     def execute(self, request: UserRequest) -> ExecutionSummary:
-        self._runtime_cancelled = False
-        self._cancel_event.clear()
+        return self.execute_in_context(request, ExecutionContext())
+
+    def execute_in_context(self, request: UserRequest, context: ExecutionContext) -> ExecutionSummary:
+        if not self._execution_lock.acquire(blocking=False):
+            raise RuntimeError("Execution engine is already running")
+        self._execution_context = context
+        context.tools = self.tools
         self.last_failure_summary = None
         try:
+            self._raise_if_cancelled()
             return self._execute(request)
         except KeyboardInterrupt:
+            session = self.current_session
+            summary = ExecutionSummary(
+                final_message="Interrupted",
+                tool_results=list(session.tool_results) if session is not None else [],
+                outcome="interrupted",
+                checkpoint=session.checkpoint if session is not None else self._initial_checkpoint(request),
+            )
             self.cancel_current_run()
+            self.last_failure_summary = self._finish(summary)
             raise
         except Exception as error:
-            self.last_failure_summary = self._runtime_failure_summary(error)
-            self.current_session = None
+            self.last_failure_summary = self._finish(self._runtime_failure_summary(error))
             raise
+        finally:
+            self._execution_lock.release()
 
     def cancel_current_run(self) -> None:
-        """Stop runtime tools after an interrupted execution.
-
-        This is idempotent because both an execution frontend and the engine
-        itself may observe the same KeyboardInterrupt.
-        """
-        if self._runtime_cancelled:
+        """Cancel the current execution context, preserving facts for terminalization."""
+        context = self._execution_context
+        if context.cancellation.is_set() and context.tools_closed:
             return
-        self._runtime_cancelled = True
-        self._cancel_event.set()
-        self.current_session = None
+        context.cancellation.set()
         self._tool_state_session_key = None
+        self._close_execution_tools()
+
+    def _close_execution_tools(self) -> None:
+        context = self._execution_context
+        if context.tools_closed:
+            return
+        context.tools_closed = True
         reset_state = getattr(self.tools, "reset_state", None)
         if callable(reset_state):
             reset_state()
@@ -320,7 +358,7 @@ class ExecutionEngine:
                                 getattr(error, "retry_status", "Model request timed out"),
                                 retry_delay,
                             )
-                        if self._cancel_event.wait(retry_delay):
+                        if self._execution_context.cancellation.wait(retry_delay):
                             raise KeyboardInterrupt
             finally:
                 if callable(stream_observer_setter):
@@ -606,10 +644,12 @@ class ExecutionEngine:
         )
 
     def _raise_if_cancelled(self) -> None:
-        if self._cancel_event.is_set():
+        if self._execution_context.cancellation.is_set():
             raise KeyboardInterrupt
 
     def _finish(self, summary: ExecutionSummary) -> ExecutionSummary:
+        if self._execution_context.terminal_summary is not None:
+            return self._execution_context.terminal_summary
         if summary.outcome == "completed" and summary.tool_results:
             summary.outcome = self._aggregate_outcome(summary.tool_results)
         if self.current_session is not None:
@@ -636,9 +676,8 @@ class ExecutionEngine:
             summary.active_capability_ids = self.capability_warehouse.persisted_capability_ids()
             self.capability_warehouse.release_scopes({"turn", "run"})
         if not self._keep_tool_state:
-            close_state = getattr(self.tools, "reset_state", None)
-            if callable(close_state):
-                close_state()
+            self._close_execution_tools()
+        self._execution_context.terminal_summary = summary
         return summary
 
     def _initial_checkpoint(self, request: UserRequest) -> TaskCheckpoint:

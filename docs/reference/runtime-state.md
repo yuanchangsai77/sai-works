@@ -13,6 +13,8 @@
 
 TaskStatus 与 Run outcome 是不同层级。任务状态为 pending、in_progress、blocked、verified、done；引擎运行终态包括 completed、blocked、stalled、runtime_error、interrupted、exhausted。不能把所有非异常返回解释为完成。
 
+独立 Runtime 接受记录的 queued/running/cancelled/finished 不替代上述状态；接受事务与提交重试见[持久化接受参考](runtime-acceptance.md)。
+
 ## 当前任务状态迁移
 
 | 当前阶段 | 允许迁移 |

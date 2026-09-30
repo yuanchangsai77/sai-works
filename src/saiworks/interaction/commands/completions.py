@@ -42,7 +42,7 @@ def complete_resume(cli: CLI, remainder: str) -> list[Completion]:
 def complete_skill(cli: CLI, remainder: str) -> list[Completion]:
     if " " in remainder.strip() or (remainder.rstrip() != remainder and remainder.strip()):
         return []
-    warehouse = getattr(cli.engine, "capability_warehouse", None)
+    warehouse = getattr(cli.runtime.view(), "capability_warehouse", None)
     if warehouse is None:
         return []
     values = [
@@ -79,7 +79,7 @@ def complete_capabilities(cli: CLI, remainder: str) -> list[Completion]:
         arguments.append(fragment)
         fragment = ""
     prefix = f"/capabilities {operation}"
-    warehouse = getattr(cli.engine, "capability_warehouse", None)
+    warehouse = getattr(cli.runtime.view(), "capability_warehouse", None)
     if warehouse is None:
         return []
 
@@ -111,7 +111,7 @@ def _complete_activation(
     committed: list[str],
     fragment: str,
 ) -> list[Completion]:
-    warehouse = cli.engine.capability_warehouse
+    warehouse = cli.runtime.view().capability_warehouse
     existing_scope = next((item for item in committed if item.startswith("--scope=")), None)
     if existing_scope is None:
         values = (

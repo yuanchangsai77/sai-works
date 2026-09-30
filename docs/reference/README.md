@@ -5,6 +5,7 @@
 | 文档 | 当前边界 |
 | --- | --- |
 | [运行状态](runtime-state.md) | 请求、终态、检查点、证据与会话投影 |
+| [持久化接受](runtime-acceptance.md) | 内部提交去重、绑定上下文与独立任务记录 |
 | [工具契约](tool-contract.md) | 模型可见结果、结构化运行信息与展示摘要 |
 | [Skill 文件](skill-format.md) | 安装目录、最小格式、覆盖与解析限制 |
 | [MCP 适配](mcp-adapter.md) | 协议、名称、资源 ID、风险与大小边界 |

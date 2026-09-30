@@ -278,7 +278,7 @@ def test_reset_and_compact_commands():
 
     # Compact command
     cli.command_registry.execute(cli, "/compact", conversation=conversation)
-    assert len(conversation) == 3
+    assert len(conversation) == 1
     assert conversation[0]["role"] == "system"
     assert "Executive Summary" in conversation[0]["content"]
 
