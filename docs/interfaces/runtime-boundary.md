@@ -34,3 +34,5 @@
 任务与运行消费[Agent Runtime](../runtime/agent-runtime.md)，操作路径消费[Execution Runtime](../runtime/execution-runtime.md)，授权消费[Policy](../runtime/policy.md)，环境与能力消费[Workspace](../runtime/workspace.md)和[Capability](../runtime/capability.md)，查询与恢复消费[Evidence & Recovery](../runtime/evidence-recovery.md)。壳接口不能重新定义这些领域语义。
 
 当前壳实现见[CLI](cli.md)和[TUI](tui.md)；待协商的跨进程边界见[协议设计](../design/protocol-boundaries.md)。
+
+常驻与多壳同步的待实现行为见[边界设计](../design/shell-core-boundary.md)，当前能力映射和分阶段迁移见[实施计划](../design/shell-core-migration.md)。两份文档不定义现行 API。
