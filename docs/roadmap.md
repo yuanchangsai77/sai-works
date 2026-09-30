@@ -15,7 +15,7 @@
 
 ## 2. 当前工作：壳与运行协调拆分
 
-文档基线已提交；壳拆分 A 核对完成，B/C 主体迁移完成但验收未闭合，具体证据见[阶段核对](design/shell-core-audit.md)。已具备无终端 Runtime、单槽串行、Task 隔离、事务接受和提交去重。阶段 D 的[同步与审批具体契约](design/runtime-sync-approval-contract.md)待确认，E 常驻与 F Companion 尚未实施。
+文档基线已提交；壳拆分 A 核对完成，B/C 同进程验收完成，具体证据见[阶段核对](design/shell-core-audit.md)。已具备无终端 Runtime、单槽串行、Task 隔离、事务接受、提交去重和统一会话收尾。阶段 D 的[同步与审批具体契约](design/runtime-sync-approval-contract.md)待确认，E 常驻与 F Companion 尚未实施。
 
 后续文档核对重点：
 

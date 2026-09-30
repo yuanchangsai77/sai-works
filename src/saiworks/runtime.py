@@ -41,6 +41,7 @@ class Runtime:
         self._pending_submission = None
         self._active_context = None
         self._task_contexts = {}
+        self._task_context_users = {}
         self.last_summary = None
         self._condition = Condition()
         self._queue = deque()
@@ -75,43 +76,57 @@ class Runtime:
             self._validate_subagent_grant(request)
         checkpoint_factory = getattr(self.engine, "_initial_checkpoint", None)
         task_id = checkpoint_factory(request).task_id if callable(checkpoint_factory) else None
-        record = self.task_store.accept(request, submission_id=submission_id, task_id=task_id)
-        with self._condition:
-            self._task_contexts.setdefault(record.task_id, ExecutionContext(task_id=record.task_id))
-        return record
+        return self.task_store.accept(request, submission_id=submission_id, task_id=task_id)
 
     def get_submission(self, submission_id: str):
         return self.task_store.get_submission(submission_id) if self.task_store is not None else None
 
     def execute(self, request: UserRequest, *, background: bool = False,
                 submission_id: str | None = None,
-                _session: StoredSession | None = None) -> ExecutionSummary:
+                _session: StoredSession | None = None,
+                _defer_terminal_notification: bool = False) -> ExecutionSummary:
         with self._condition:
             record = self.accept(request, submission_id=submission_id if submission_id is not None else uuid4().hex) if self.task_store is not None else None
+            if record is not None:
+                self._retain_task_context(record.task_id)
             ticket = object()
             self._queue.append(ticket)
             self._condition.notify_all()
         with self.execution_slot(ticket):
             if self._pending_submission is not None:
+                if record is not None:
+                    self._release_task_context(record.task_id)
                 raise RuntimeError("Previous delegated result is awaiting validation and persistence")
             if record is None:
-                return self._execute(request, background=background, session=_session)
-            current = self.task_store.get_submission(record.submission_id)
-            if current.result is not None:
-                self._task_contexts.pop(record.task_id, None)
-                return current.result
-            if not self.task_store.claim(record.submission_id):
-                raise RuntimeError("Accepted task is already running or needs explicit recovery; it will not be replayed")
-            bound_request = record.request()
-            context = self._task_contexts[record.task_id]
-            self.last_summary = None
-            self.engine.last_failure_summary = None
+                try:
+                    summary = self._execute(request, background=background, session=_session)
+                except KeyboardInterrupt:
+                    if not _defer_terminal_notification:
+                        self._notify_terminal(self.last_summary, background=background)
+                    raise
+                if not _defer_terminal_notification:
+                    self._notify_terminal(summary, background=background)
+                return summary
+            bound_request = request
+            claimed = False
             try:
+                current = self.task_store.get_submission(record.submission_id)
+                if current.result is not None:
+                    return current.result
+                if not self.task_store.claim(record.submission_id):
+                    raise RuntimeError("Accepted task is already running or needs explicit recovery; it will not be replayed")
+                claimed = True
+                bound_request = record.request()
+                context = self._task_contexts[record.task_id]
+                self.last_summary = None
+                self.engine.last_failure_summary = None
                 self._active_context = context
                 self._prepare_task(record.task_id)
 
                 summary = self._execute(bound_request, background=background, context=context, session=_session)
             except BaseException as error:
+                if not claimed:
+                    raise
                 partial = self.last_summary or getattr(self.engine, "last_failure_summary", None)
                 if background and bound_request.metadata.get("defer_finalize"):
                     self._pending_submission = record.submission_id
@@ -119,6 +134,8 @@ class Runtime:
                 self.task_store.finish(record.submission_id, partial,
                                        run_id=getattr(self.logger, "last_run_id", None),
                                        error=type(error).__name__)
+                if isinstance(error, KeyboardInterrupt) and not _defer_terminal_notification:
+                    self._notify_terminal(partial, background=background)
                 raise
             else:
                 if background and bound_request.metadata.get("defer_finalize"):
@@ -126,13 +143,34 @@ class Runtime:
                     return summary
                 self.task_store.finish(record.submission_id, summary,
                                        run_id=getattr(self.logger, "last_run_id", None))
+                if not _defer_terminal_notification:
+                    self._notify_terminal(summary, background=background)
                 return summary
             finally:
                 self._active_context = None
                 if self._pending_submission != record.submission_id:
-                    self._task_contexts.pop(record.task_id, None)
+                    self._release_task_context(record.task_id)
                 if "last_session_user_message" in bound_request.metadata:
                     request.metadata["last_session_user_message"] = bound_request.metadata["last_session_user_message"]
+
+    def _retain_task_context(self, task_id: str) -> None:
+        self._task_contexts.setdefault(task_id, ExecutionContext(task_id=task_id))
+        self._task_context_users[task_id] = self._task_context_users.get(task_id, 0) + 1
+
+    def _release_task_context(self, task_id: str) -> None:
+        with self._condition:
+            remaining = self._task_context_users.get(task_id, 0) - 1
+            if remaining > 0:
+                self._task_context_users[task_id] = remaining
+                return
+            self._task_context_users.pop(task_id, None)
+            self._task_contexts.pop(task_id, None)
+
+    def _notify_terminal(self, summary: ExecutionSummary | None, *, background: bool) -> None:
+        if background or summary is None:
+            return
+        name = "on_run_interrupted" if getattr(summary, "outcome", None) == "interrupted" else "on_run_finished"
+        self._notify(name, summary)
 
     def _notify(self, name: str, value) -> None:
         callback = getattr(self, name)
@@ -142,7 +180,13 @@ class Runtime:
             callback(value)
         except Exception as error:
             if self.logger is not None:
-                self.logger.record("observer.error", {"observer": name, "error": type(error).__name__})
+                try:
+                    self.logger.record("observer.error", {
+                        "observer": name,
+                        "error": type(error).__name__,
+                    })
+                except Exception:
+                    pass
 
     def _prepare_task(self, task_id: str) -> None:
         if self._active_task_id == task_id:
@@ -171,6 +215,49 @@ class Runtime:
 
     def run_background(self, request: UserRequest) -> ExecutionSummary:
         return self.execute(request, background=True)
+
+    def execute_persisted_run(
+        self,
+        request: UserRequest,
+        session: StoredSession,
+        *,
+        status: str = "active",
+        close_runtime: bool = False,
+    ) -> ExecutionSummary:
+        submission_id = request.metadata.get("runtime_submission_id")
+        if not isinstance(submission_id, str) or not submission_id.strip():
+            submission_id = uuid4().hex
+            request.metadata["runtime_submission_id"] = submission_id
+        try:
+            summary = self.execute(
+                request,
+                submission_id=submission_id,
+                _session=session,
+                _defer_terminal_notification=True,
+            )
+        except KeyboardInterrupt:
+            summary = self.last_summary
+            if isinstance(summary, ExecutionSummary):
+                self.persist_run(
+                    session,
+                    request.prompt,
+                    summary,
+                    model_user_content=request.metadata.get("last_session_user_message"),
+                    status=status,
+                    close_runtime=close_runtime,
+                )
+                self._notify_terminal(summary, background=False)
+            raise
+        self.persist_run(
+            session,
+            request.prompt,
+            summary,
+            model_user_content=request.metadata.get("last_session_user_message"),
+            status=status,
+            close_runtime=close_runtime,
+        )
+        self._notify_terminal(summary, background=False)
+        return summary
 
     def _execute(self, request: UserRequest, *, background: bool, context: ExecutionContext | None = None, session=None) -> ExecutionSummary:
         if background and self.subagent_grant is not None:
@@ -213,8 +300,6 @@ class Runtime:
             if self.logger is not None:
                 self.logger.record("run.interrupted", {"tool_count": len(summary.tool_results)})
                 self.logger.finalize(request, summary)
-            if not background:
-                self._notify("on_run_interrupted", summary)
             raise
         except Exception as error:
             if background:
@@ -242,8 +327,6 @@ class Runtime:
         self.last_summary = summary
         if self.logger is not None and not (background and request.metadata.get("defer_finalize")):
             self.logger.finalize(request, summary)
-        if not background:
-            self._notify("on_run_finished", summary)
         return summary
 
     def close_tool_state(self) -> None:
@@ -316,12 +399,18 @@ class Runtime:
         close_runtime: bool = False,
     ) -> None:
         if self._pending_submission is not None and self.task_store is not None:
-            self.task_store.finish(self._pending_submission, summary,
-                                   run_id=getattr(self.logger, "last_run_id", None))
-            record = self.task_store.get_submission(self._pending_submission)
-            self._task_contexts.pop(record.task_id, None)
+            submission_id = self._pending_submission
+            record = self.task_store.get_submission(submission_id)
+            if record.result is None:
+                self.task_store.finish(submission_id, summary,
+                                       run_id=getattr(self.logger, "last_run_id", None))
+            self.sessions.persist_run(session, prompt, summary, model_user_content=model_user_content,
+                                      status=status, close_runtime=close_runtime)
+            self._release_task_context(record.task_id)
             self._pending_submission = None
-        return self.sessions.persist_run(session, prompt, summary, model_user_content=model_user_content, status=status, close_runtime=close_runtime)
+            return None
+        return self.sessions.persist_run(session, prompt, summary, model_user_content=model_user_content,
+                                         status=status, close_runtime=close_runtime)
 
     _apply_workspace_summary = staticmethod(SessionCoordinator._apply_workspace_summary)
 

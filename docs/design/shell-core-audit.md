@@ -1,6 +1,6 @@
 # 壳与内核拆分：阶段核对与实施证据
 
-日期：2026-09-30。设计基线提交：e70e525。A 核对完成，B/C 主体迁移完成但验收未闭合；D/E/F 未实施。无网络 API、无常驻续跑或断线审批承诺。
+日期：2026-10-01。设计基线提交：e70e525。A 核对完成，B/C 的同进程职责迁移与 R1–R3 可靠性验收完成；D/E/F 未实施。无网络 API、无常驻续跑或断线审批承诺。
 
 ## 1. 规范与设计审查
 
@@ -34,7 +34,7 @@ B/C 相关套件：headless runtime、engine/session/CLI、subagent、CLI entryp
 
 ## 4. 未闭合能力与下一门槛
 
-后续审查已复现同 Task 排队上下文失效、结束通知早于结果持久化两项可靠性缺陷，见[临时审查问题记录](shell-core-review-temporary.md)。上表描述已迁移职责与已有测试覆盖，不构成全部不变量验收通过。
+后续审查复现的 R1–R3 已修复，见[临时审查问题记录](shell-core-review-temporary.md)。专项覆盖同 Task 排队、claim 后准备失败、结果保存失败不通知且不重放、会话保存后通知、失败回滚、后台交付只补保存以及观察错误隔离；B/C 相关套件 195 项通过。全量 574 项通过、6 项失败，失败项与上节记录的基线相同。
 
 - 审批仍同步；等待释放执行槽、TTL、跨客户端有效性与可恢复 continuation 在 D 实施。B/C 的运行内审批复用保持兼容。
 - 查询投影与持久化结果不是 revision 同步协议；多观察者、通知缺口与慢客户端验收在 D 实施。
@@ -42,4 +42,4 @@ B/C 相关套件：headless runtime、engine/session/CLI、subagent、CLI entryp
 - Task 崩溃后保留身份和未知执行事实，不自动重新执行 running 尝试。跨进程恢复不构成当前保证。
 - Companion 的全局快捷键、工作区输入、审批和重连界面在 F 实施。
 
-下一步先修复临时审查记录中的 B/C 缺陷并完成验收，再按[阶段 D 契约提案](runtime-sync-approval-contract.md)确认新增查询字段、审批与 continuation 存储语义，再实施 D；具体发布入口和跨进程协议按 E 门槛单独确认。
+下一步按[阶段 D 契约提案](runtime-sync-approval-contract.md)确认新增查询字段、审批与 continuation 存储语义，再实施 D；具体发布入口和跨进程协议按 E 门槛单独确认。

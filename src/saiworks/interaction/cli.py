@@ -62,6 +62,21 @@ class CLI:
     def run_background(self, request: UserRequest) -> ExecutionSummary:
         return self.runtime.run_background(request)
 
+    def run_persisted(
+        self,
+        request: UserRequest,
+        session: StoredSession,
+        *,
+        status: str = "active",
+        close_runtime: bool = False,
+    ) -> ExecutionSummary:
+        return self.runtime.execute_persisted_run(
+            request,
+            session,
+            status=status,
+            close_runtime=close_runtime,
+        )
+
     def _validate_subagent_grant(self, request: UserRequest) -> None:
         return self.runtime._validate_subagent_grant(request)
 
@@ -171,7 +186,6 @@ class CLI:
                     self.runtime.discard_prepared_turn(request)
                     continue
             except KeyboardInterrupt:
-                self.runtime.save_interrupted_session(session)
                 prompt = None
                 continue
             prompt = None

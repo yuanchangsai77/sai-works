@@ -1,7 +1,7 @@
 # 壳与内核迁移计划
 
-- 日期：2026-09-30
-- 状态：首版行为决策已确认；A 核对完成，B/C 主体迁移完成但验收未闭合，D/E/F 待实施。
+- 日期：2026-10-01
+- 状态：首版行为决策已确认；A 核对完成，B/C 同进程验收完成，D/E/F 待实施。
 - 设计依据：[壳与内核边界设计](shell-core-boundary.md)。
 - 核对方式：源码与基线回归对照，B/C 相关行为已测试；验收证据见[阶段核对](shell-core-audit.md)。
 
@@ -115,4 +115,4 @@ Model Core 默认可共享常驻，Desktop/TUI 退出不自动关闭它。SaiWor
 
 不要复制多份“正式契约”；字段和错误码经确认后归唯一接口参考，设计文档链接它。源码核对表随实现推进更新，区分目标、已实现、已验证。
 
-B/C 已迁移无终端装配、单槽与 Task 隔离、持久化接受、去重、会话及命令协调和收尾职责；可靠性验收仍有缺口，见[临时审查问题记录](shell-core-review-temporary.md)。先闭合 B/C 缺陷，再进行阶段 D 的[具体契约确认](runtime-sync-approval-contract.md)，随后实施修订同步与可恢复审批；常驻和 Companion 分别在 E、F 验收。
+B/C 已迁移无终端装配、单槽与 Task 隔离、持久化接受、去重、会话及命令协调和收尾职责；R1–R3 已闭环，见[临时审查问题记录](shell-core-review-temporary.md)。下一步进行阶段 D 的[具体契约确认](runtime-sync-approval-contract.md)，随后实施修订同步与可恢复审批；常驻和 Companion 分别在 E、F 验收。

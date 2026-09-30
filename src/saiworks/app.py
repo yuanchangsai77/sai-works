@@ -413,6 +413,14 @@ def main() -> None:
                 metadata["workspace_state"] = getattr(resumed_session, "workspace_state", None)
             metadata["context_paths"] = list(args.context)
             request = UserRequest(prompt=prompt, cwd=cwd, metadata=metadata)
+            if resumed_session is not None and hasattr(app, "run_persisted"):
+                app.run_persisted(
+                    request,
+                    resumed_session,
+                    status="closed",
+                    close_runtime=True,
+                )
+                return
             try:
                 summary = app.run(request)
             except KeyboardInterrupt:

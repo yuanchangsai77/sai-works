@@ -7,7 +7,7 @@ import pytest
 from saiworks.app import create_runtime
 from saiworks.runtime import Runtime
 from saiworks.sessions.tasks import TaskStore
-from saiworks.types import ExecutionSummary, ModelReply, ToolAction, UserRequest
+from saiworks.types import ExecutionSummary, ModelReply, TaskCheckpoint, ToolAction, UserRequest
 
 
 def test_headless_factory_and_persistence_do_not_load_terminal(tmp_path, monkeypatch, capsys):
@@ -121,6 +121,160 @@ def test_single_slot_fifo_and_failure_release(tmp_path):
     assert calls == ["first", "second", "third"]
 
 
+def test_same_task_queued_submissions_keep_context_until_both_finish(tmp_path):
+    first_started, release_first = Event(), Event()
+    contexts = []
+
+    class Engine:
+        last_failure_summary = None
+
+        def _initial_checkpoint(self, _request):
+            return TaskCheckpoint(task_id="shared-task")
+
+        def execute_in_context(self, request, context):
+            contexts.append(context)
+            if request.prompt == "first":
+                first_started.set()
+                assert release_first.wait(3)
+            return ExecutionSummary(request.prompt, [], checkpoint=TaskCheckpoint(task_id="shared-task"))
+
+    store = TaskStore(tmp_path / "tasks.sqlite3")
+    runtime = Runtime(Engine(), task_store=store)
+    first_request = UserRequest("first", str(tmp_path))
+    second_request = UserRequest("second", str(tmp_path))
+    runtime.accept(first_request, submission_id="first")
+    runtime.accept(second_request, submission_id="second")
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        first = pool.submit(runtime.execute, first_request, submission_id="first")
+        assert first_started.wait(3)
+        second = pool.submit(runtime.execute, second_request, submission_id="second")
+        with runtime._condition:
+            assert runtime._condition.wait_for(lambda: len(runtime._queue) == 1, timeout=3)
+        release_first.set()
+        assert first.result(timeout=3).final_message == "first"
+        assert second.result(timeout=3).final_message == "second"
+
+    assert contexts[0] is contexts[1]
+    assert store.get_submission("first").state == "finished"
+    assert store.get_submission("second").state == "finished"
+    assert "shared-task" not in runtime._task_contexts
+
+
+def test_failure_after_claim_is_persisted_instead_of_leaving_running(tmp_path):
+    class Engine:
+        last_failure_summary = None
+
+        def execute(self, _request):
+            raise AssertionError("execution must not start")
+
+    store = TaskStore(tmp_path / "tasks.sqlite3")
+    runtime = Runtime(Engine(), task_store=store)
+    runtime.execution_factory = lambda: (_ for _ in ()).throw(OSError("tool setup failed"))
+
+    with pytest.raises(OSError, match="tool setup failed"):
+        runtime.execute(UserRequest("prepare", str(tmp_path)), submission_id="prepare-failure")
+
+    record = store.get_submission("prepare-failure")
+    assert record.state == "finished"
+    assert record.result is None
+    assert record.error == "OSError"
+
+
+def test_terminal_notification_waits_for_result_commit(tmp_path, monkeypatch):
+    class Engine:
+        calls = 0
+
+        def execute(self, _request):
+            self.calls += 1
+            return ExecutionSummary("executed", [])
+
+    store = TaskStore(tmp_path / "tasks.sqlite3")
+    engine = Engine()
+    runtime = Runtime(engine, task_store=store)
+    notifications = []
+    runtime.on_run_finished = lambda summary: notifications.append(summary.final_message)
+    monkeypatch.setattr(store, "finish", lambda *args, **kwargs: (_ for _ in ()).throw(OSError("disk full")))
+
+    request = UserRequest("mutate once", str(tmp_path))
+    with pytest.raises(OSError, match="disk full"):
+        runtime.execute(request, submission_id="commit-failure")
+
+    assert notifications == []
+    assert store.get_submission("commit-failure").state == "running"
+    with pytest.raises(RuntimeError, match="will not be replayed"):
+        runtime.execute(request, submission_id="commit-failure")
+    assert engine.calls == 1
+
+
+def test_session_terminal_notification_waits_for_session_commit(tmp_path):
+    from saiworks.sessions import SessionStore
+
+    class Engine:
+        def execute(self, _request):
+            return ExecutionSummary("saved result", [])
+
+    session_store = SessionStore(base_dir=tmp_path / "sessions")
+    session = session_store.create(str(tmp_path))
+    runtime = Runtime(
+        Engine(),
+        session_store=session_store,
+        task_store=TaskStore(tmp_path / "tasks.sqlite3"),
+    )
+    observed_messages = []
+    runtime.on_run_finished = lambda _summary: observed_messages.extend(
+        session_store.load(session.session_id).messages
+    )
+    request = UserRequest("save this turn", str(tmp_path), {"session_id": session.session_id})
+    conversation = []
+
+    summary = runtime.execute_session_turn(request, request.prompt, session, conversation, 0)
+
+    assert summary.final_message == "saved result"
+    assert observed_messages[-1] == {"role": "assistant", "content": "saved result"}
+
+
+def test_failed_session_commit_rolls_back_memory_and_suppresses_terminal_notification(tmp_path, monkeypatch):
+    from saiworks.sessions import SessionStore
+
+    class Engine:
+        calls = 0
+
+        def execute(self, _request):
+            self.calls += 1
+            return ExecutionSummary("not durably saved", [])
+
+    session_store = SessionStore(base_dir=tmp_path / "sessions")
+    session = session_store.create(str(tmp_path), messages=[{"role": "user", "content": "earlier"}])
+    engine = Engine()
+    runtime = Runtime(
+        engine,
+        session_store=session_store,
+        task_store=TaskStore(tmp_path / "tasks.sqlite3"),
+    )
+    notifications = []
+    runtime.on_run_finished = lambda summary: notifications.append(summary.final_message)
+    conversation = list(session.messages)
+    before_messages = list(session.messages)
+    before_revision = session.revision
+    monkeypatch.setattr(session_store, "save", lambda _session: (_ for _ in ()).throw(OSError("disk full")))
+    request = UserRequest("save this turn", str(tmp_path), {"session_id": session.session_id})
+
+    with pytest.raises(OSError, match="disk full"):
+        runtime.execute_session_turn(request, request.prompt, session, conversation, 0)
+
+    assert notifications == []
+    assert conversation == before_messages
+    assert session.messages == before_messages
+    assert session.revision == before_revision
+    assert isinstance(request.metadata.get("runtime_submission_id"), str)
+
+    monkeypatch.setattr(session_store, "save", SessionStore.save.__get__(session_store, SessionStore))
+    summary = runtime.execute_session_turn(request, request.prompt, session, conversation, 0)
+    assert summary.final_message == "not durably saved"
+    assert engine.calls == 1
+    assert notifications == ["not durably saved"]
+
+
 def test_interrupt_retains_partial_results_and_next_run_has_new_token(tmp_path, monkeypatch):
     monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
     monkeypatch.chdir(tmp_path)
@@ -198,6 +352,36 @@ def test_display_failure_cannot_change_execution_or_terminal_state(tmp_path):
     assert runtime.task_store.get_submission("observer").state == "finished"
 
 
+def test_observer_and_observer_logging_failures_do_not_escape(tmp_path):
+    class Engine:
+        def execute(self, _request):
+            return ExecutionSummary("authoritative result", [])
+
+    class FailingLogger:
+        last_run_id = None
+
+        def start_run(self, *_args, **_kwargs):
+            pass
+
+        def finalize(self, *_args, **_kwargs):
+            pass
+
+        def record(self, *_args, **_kwargs):
+            raise OSError("log unavailable")
+
+    runtime = Runtime(
+        Engine(),
+        logger=FailingLogger(),
+        task_store=TaskStore(tmp_path / "tasks.sqlite3"),
+    )
+    runtime.on_run_finished = lambda _summary: (_ for _ in ()).throw(RuntimeError("disconnected"))
+
+    summary = runtime.execute(UserRequest("hello", str(tmp_path)), submission_id="observer-log")
+
+    assert summary.final_message == "authoritative result"
+    assert runtime.task_store.get_submission("observer-log").state == "finished"
+
+
 def test_bound_recovery_metadata_and_result_roundtrip(tmp_path):
     from saiworks.capabilities.model import InstructionContent
     from saiworks.types import EvidenceRecord, RuntimeBlocker, SessionResumeState, TaskCheckpoint, WorkspaceSessionState
@@ -238,6 +422,50 @@ def test_background_result_is_committed_only_after_handoff_validation(tmp_path):
     runtime.persist_run(None, "delegate", summary)
     assert store.get_submission("child").result.outcome == "stalled"
     assert store.get_submission("child").result.final_message == "handoff evidence missing"
+
+
+def test_background_persistence_failure_retries_save_without_reexecution(tmp_path, monkeypatch):
+    from saiworks.sessions import SessionStore
+
+    class Engine:
+        calls = 0
+
+        def execute(self, _request):
+            self.calls += 1
+            return ExecutionSummary("candidate", [])
+
+    task_store = TaskStore(tmp_path / "tasks.sqlite3")
+    session_store = SessionStore(base_dir=tmp_path / "sessions")
+    session = session_store.create(str(tmp_path))
+    engine = Engine()
+    runtime = Runtime(engine, session_store=session_store, task_store=task_store)
+    request = UserRequest("delegate", str(tmp_path), {"defer_finalize": True})
+    summary = runtime.execute(request, background=True, submission_id="child-retry")
+    task_id = task_store.get_submission("child-retry").task_id
+    save = session_store.save
+    attempts = 0
+
+    def fail_once(value):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise OSError("disk full")
+        return save(value)
+
+    monkeypatch.setattr(session_store, "save", fail_once)
+    with pytest.raises(OSError, match="disk full"):
+        runtime.persist_run(session, request.prompt, summary)
+
+    assert task_store.get_submission("child-retry").state == "finished"
+    assert runtime._pending_submission == "child-retry"
+    assert task_id in runtime._task_contexts
+    assert session.messages == []
+
+    runtime.persist_run(session, request.prompt, summary)
+    assert engine.calls == 1
+    assert runtime._pending_submission is None
+    assert task_id not in runtime._task_contexts
+    assert session_store.load(session.session_id).messages[-1]["content"] == "candidate"
 
 
 def test_headless_compaction_archives_history_and_rolls_back_failed_save(tmp_path, monkeypatch):

@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+from copy import deepcopy
+from dataclasses import fields
 from pathlib import Path
+from uuid import uuid4
 
 from ..types import ExecutionSummary, SessionRecord, StoredSession, UserRequest, WorkspaceSessionState
 from .messages import SESSION_REQUEST_MESSAGE_FORMAT
@@ -11,6 +14,23 @@ class SessionCoordinator:
 
     def __init__(self, runtime):
         self.runtime = runtime
+
+    @staticmethod
+    def _snapshot_session(session: StoredSession) -> StoredSession:
+        return deepcopy(session)
+
+    @staticmethod
+    def _restore_session(session: StoredSession, snapshot: StoredSession) -> None:
+        for item in fields(session):
+            setattr(session, item.name, deepcopy(getattr(snapshot, item.name)))
+
+    @staticmethod
+    def _submission_id(request: UserRequest) -> str:
+        submission_id = request.metadata.get("runtime_submission_id")
+        if not isinstance(submission_id, str) or not submission_id.strip():
+            submission_id = uuid4().hex
+            request.metadata["runtime_submission_id"] = submission_id
+        return submission_id
 
     @property
     def engine(self):
@@ -83,6 +103,7 @@ class SessionCoordinator:
     ) -> None:
         if self.session_store is None:
             return
+        session_before = self._snapshot_session(session)
         # Normal foreground runs are finalized by _run_once. Background subagents
         # deliberately defer that step until the runner has validated the final
         # outcome, leaving the logger's run open here.
@@ -93,24 +114,28 @@ class SessionCoordinator:
                 metadata={"session_id": session.session_id},
             )
             self.logger.finalize(request, summary)
-        user_message = {
-            "role": "user",
-            "content": model_user_content if isinstance(model_user_content, str) else prompt,
-        }
-        if isinstance(model_user_content, str):
-            user_message["session_message_format"] = SESSION_REQUEST_MESSAGE_FORMAT
-        session.messages.extend([user_message, {"role": "assistant", "content": summary.final_message}])
-        session.status = status
-        session.active_capability_ids = list(
-            getattr(summary, "active_capability_ids", [])
-        )
-        self._apply_workspace_summary(session, summary)
-        run_summary = getattr(self.logger, "last_run_summary", None)
-        if run_summary is not None and all(item.run_id != run_summary.run_id for item in session.trace):
-            session.trace.append(run_summary)
-        self._attach_last_run_id(session)
         try:
-            self.session_store.save(session)
+            try:
+                user_message = {
+                    "role": "user",
+                    "content": model_user_content if isinstance(model_user_content, str) else prompt,
+                }
+                if isinstance(model_user_content, str):
+                    user_message["session_message_format"] = SESSION_REQUEST_MESSAGE_FORMAT
+                session.messages.extend([user_message, {"role": "assistant", "content": summary.final_message}])
+                session.status = status
+                session.active_capability_ids = list(
+                    getattr(summary, "active_capability_ids", [])
+                )
+                self._apply_workspace_summary(session, summary)
+                run_summary = getattr(self.logger, "last_run_summary", None)
+                if run_summary is not None and all(item.run_id != run_summary.run_id for item in session.trace):
+                    session.trace.append(run_summary)
+                self._attach_last_run_id(session)
+                self.session_store.save(session)
+            except BaseException:
+                self._restore_session(session, session_before)
+                raise
             if (
                 session.session_role == "primary"
                 and session.cluster_id
@@ -177,6 +202,8 @@ class SessionCoordinator:
         conversation: list[dict[str, str]],
         context_generation: int,
     ) -> None:
+        conversation_before = deepcopy(conversation)
+        session_before = self._snapshot_session(session) if session is not None else None
         model_user_message = request.metadata.get("last_session_user_message")
         user_message = {
             "role": "user",
@@ -184,20 +211,26 @@ class SessionCoordinator:
         }
         if isinstance(model_user_message, str):
             user_message["session_message_format"] = SESSION_REQUEST_MESSAGE_FORMAT
-        conversation.extend([user_message, {"role": "assistant", "content": summary.final_message}])
-        if session is None or self.session_store is None:
-            return
+        try:
+            conversation.extend([user_message, {"role": "assistant", "content": summary.final_message}])
+            if session is None or self.session_store is None:
+                return
 
-        session.messages = list(conversation)
-        self._apply_workspace_summary(session, summary)
-        session.status = "active"
-        session.active_capability_ids = list(getattr(summary, "active_capability_ids", []))
-        run_summary = getattr(self.logger, "last_run_summary", None)
-        if run_summary is not None and all(item.run_id != run_summary.run_id for item in session.trace):
-            session.trace.append(run_summary)
-        self._attach_last_run_id(session)
-        session.context_generation = context_generation
-        self.session_store.save(session)
+            session.messages = list(conversation)
+            self._apply_workspace_summary(session, summary)
+            session.status = "active"
+            session.active_capability_ids = list(getattr(summary, "active_capability_ids", []))
+            run_summary = getattr(self.logger, "last_run_summary", None)
+            if run_summary is not None and all(item.run_id != run_summary.run_id for item in session.trace):
+                session.trace.append(run_summary)
+            self._attach_last_run_id(session)
+            session.context_generation = context_generation
+            self.session_store.save(session)
+        except BaseException:
+            conversation[:] = conversation_before
+            if session is not None and session_before is not None:
+                self._restore_session(session, session_before)
+            raise
         if session.context_generation > context_generation:
             conversation.clear()
             conversation.extend(session.messages)
@@ -235,14 +268,24 @@ class SessionCoordinator:
 
                 if session.cluster_id and self.subagent_coordinator is not None:
                     self.subagent_coordinator.update_member_state(session, "running")
-                summary = self.runtime.execute(request, _session=session)
-                self.append_turn_and_persist(
-                    request, prompt, summary, session, conversation, context_generation
-                )
+                submission_id = self._submission_id(request)
+                try:
+                    summary = self.runtime.execute(
+                        request,
+                        submission_id=submission_id,
+                        _session=session,
+                        _defer_terminal_notification=True,
+                    )
+                except KeyboardInterrupt:
+                    self.save_interrupted_session(session)
+                    self.runtime._notify_terminal(self.runtime.last_summary, background=False)
+                    raise
+                self.append_turn_and_persist(request, prompt, summary, session, conversation, context_generation)
                 if session.cluster_id and self.subagent_coordinator is not None:
                     self.subagent_coordinator.update_member_state(
                         session, self._cluster_state_for_outcome(summary.outcome)
                     )
+                self.runtime._notify_terminal(summary, background=False)
                 return summary
 
         return self.runtime.execute(request)
