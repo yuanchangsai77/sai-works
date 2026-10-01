@@ -4,7 +4,7 @@ from threading import Event, Thread
 import pytest
 
 from saiworks.interaction.desktop import DesktopController
-from saiworks.interaction.desktop_app import DesktopProgressReporter
+from saiworks.interaction.desktop_app import DesktopProgressReporter, format_approval_prompt
 from saiworks.runtime import Runtime
 from saiworks.sessions import SessionStore
 from saiworks.sessions.tasks import TaskStore
@@ -139,3 +139,13 @@ def test_desktop_progress_reporter_exposes_only_presentation_text():
         "Running read_file…",
         "read_file completed",
     ]
+
+
+def test_desktop_approval_identifies_saiworks_and_explains_macos_host():
+    action = type("Action", (), {"name": "shell_exec", "arguments": {"command": "open -a Music"}})()
+
+    prompt = format_approval_prompt(action, "execution requires explicit approval")
+
+    assert "SaiWorks Runtime is requesting permission" in prompt
+    assert '"command": "open -a Music"' in prompt
+    assert "Zed, Terminal, or Python" in prompt

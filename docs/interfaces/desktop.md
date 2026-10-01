@@ -14,6 +14,8 @@
 
 Desktop 创建 Runtime 时要求已配置真实模型端点，不接受静默 Stub 降级。缺失 `SAIWORKS_MODEL_BASE_URL` 属于启动配置错误；模型端点已配置但不可达则作为运行错误展示，并由内核日志保留调用证据。
 
+参考窗口采用“导航侧栏 + 对话主区 + 底部输入区”的布局。审批窗口必须明确执行主体为 SaiWorks Runtime，展示动作、原因与参数，并提醒用户 macOS 可能把 Automation 权限归到启动 SaiWorks 的宿主应用；这项说明只解释系统归属，不替代逐动作审批。
+
 ## 当前限制
 
 - controller 与 Runtime 同进程，关闭进程不保证任务续跑。
