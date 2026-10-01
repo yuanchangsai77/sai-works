@@ -122,6 +122,8 @@ SAIWORKS_MODE=confirm
 
 `SAIWORKS_MODE` 可选值为 `readonly`、`confirm`、`auto`。MCP 的敏感值应通过系统环境变量提供，例如 `AMAP_MCP_KEY`。
 
+CLI 与测试环境在未配置模型地址时仍可使用 `StubModelClient` 验证编排链路；Desktop 不做这种静默降级，缺少 `SAIWORKS_MODEL_BASE_URL` 时会停止启动并显示配置提示。每次运行选择的后端类型记录在 `.saiworks/runs/<run_id>/events.jsonl` 的 `runtime.model_backend` 事件中，并同步出现在 `details.log` 概览。
+
 ## MCP server 字段
 
 | 字段 | 默认值 | 说明 |

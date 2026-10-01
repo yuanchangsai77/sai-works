@@ -511,6 +511,13 @@ def test_create_model_client_uses_stub_without_base_url(monkeypatch):
     assert isinstance(client, StubModelClient)
 
 
+def test_create_model_client_can_require_real_endpoint(monkeypatch):
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
+
+    with pytest.raises(RuntimeError, match="SAIWORKS_MODEL_BASE_URL"):
+        create_model_client(logger=None, require_configured=True)
+
+
 def test_build_messages_keeps_tool_definitions_in_stable_system_prefix():
     builder = ModelPromptBuilder()
     session = SessionContext(

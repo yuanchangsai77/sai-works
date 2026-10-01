@@ -55,9 +55,16 @@ def create_model_client(
     *,
     timeout: float | None = None,
     stream: bool | None = None,
+    require_configured: bool = False,
 ) -> StubModelClient | OpenAICompatibleModelClient:
     config = config or load_runtime_config()
     if not config.model_base_url:
+        if require_configured:
+            raise RuntimeError(
+                "No model endpoint is configured. Set SAIWORKS_MODEL_BASE_URL in "
+                "the project .env file (for example http://127.0.0.1:3000), then "
+                "start SaiWorks Desktop again."
+            )
         return StubModelClient()
 
     model_config = ModelClientConfig(
@@ -81,6 +88,7 @@ def create_runtime(
     background: bool = False,
     subagent_grant: SubagentExecutionGrant | None = None,
     model_stream: bool | None = None,
+    require_model: bool = False,
     _logger=None,
     _task_store_enabled: bool = True,
 ) -> Runtime:
@@ -209,6 +217,7 @@ def create_runtime(
         config=config,
         timeout=config.orchestration.subagent_model_timeout if background else None,
         stream=model_stream,
+        require_configured=require_model,
     )
     engine = ExecutionEngine(
         model=model,
@@ -263,7 +272,8 @@ def create_runtime(
 
     runtime.execution_factory = lambda: create_runtime(
         mode=mode, workspace_root=root, background=background, subagent_grant=subagent_grant,
-        model_stream=model_stream, _logger=logger, _task_store_enabled=False,
+        model_stream=model_stream, require_model=require_model,
+        _logger=logger, _task_store_enabled=False,
     ).engine
     return runtime
 

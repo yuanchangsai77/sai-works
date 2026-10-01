@@ -332,11 +332,20 @@ class InMemoryLogger:
 
         turns = self._group_turns()
         active_instructions = getattr(summary, "active_instructions", [])
+        backend = next(
+            (
+                str(event.payload.get("type", ""))
+                for event in self.events
+                if event.name == "runtime.model_backend"
+            ),
+            "unknown",
+        )
 
         lines = [
             "Overview",
             f"- run_id: {self.run_id}",
             f"- prompt: {redact_text(request.prompt)}",
+            f"- model backend: {backend}",
         ]
 
         if active_instructions:

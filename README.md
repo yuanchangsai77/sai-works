@@ -156,7 +156,7 @@ Behavior:
 
 - `SaiWorks` automatically loads `.env` beside the source checkout; an arbitrary
   target workspace's `.env` is not loaded automatically
-- If `SAIWORKS_MODEL_BASE_URL` is still not set, `SaiWorks` keeps using `StubModelClient`
+- If `SAIWORKS_MODEL_BASE_URL` is still not set, CLI/development calls keep using `StubModelClient`; Desktop stops with a configuration message instead of presenting a demo reply as a real answer
 - If `SAIWORKS_MODEL_BASE_URL` is set, `SaiWorks` sends requests to `POST /v1/chat/completions`
 - `SAIWORKS_MODEL_TIMEOUT` defaults to 60 seconds. It is the total timeout for JSON responses and the connection,
   first-byte, and inactivity timeout for SSE; active SSE traffic refreshes the inactivity window.
@@ -168,6 +168,7 @@ Behavior:
   environment setting.
 - `SAIWORKS_MODE` controls tool safety and defaults to `confirm`
 - The configured endpoint remains responsible for its upstream credentials and provider-specific authentication
+- Shell-independent run evidence is stored under `.saiworks/runs/<run_id>/`; `events.jsonl` includes the selected model backend and `details.log` provides a redacted readable summary
 - The real-model path now supports tool-call loops: the model can request built-in tools, receive tool results, and continue until it produces a final answer
 - Each run automatically writes observability logs under `.saiworks/runs/<timestamp>/`, including `events.jsonl` and a layered `details.log`
 

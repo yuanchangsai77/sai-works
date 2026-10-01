@@ -320,6 +320,14 @@ class Runtime:
                         registered_skills = sorted(loader.registry._skills.keys())
                         break
             self.logger.start_run(request, registered_skills=registered_skills)
+            try:
+                self.logger.record(
+                    "runtime.model_backend",
+                    {"type": type(getattr(self.engine, "model", None)).__name__},
+                )
+            except Exception:
+                # Observability must never turn a valid run into a failed run.
+                pass
             if session is not None and self.session_store is not None:
                 self._attach_last_run_id(session)
                 self.session_store.save(session)

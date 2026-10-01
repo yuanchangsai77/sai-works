@@ -293,7 +293,7 @@ def main() -> None:
 
     root = tk.Tk()
     try:
-        runtime = create_runtime(workspace_root=Path.cwd())
+        runtime = create_runtime(workspace_root=Path.cwd(), require_model=True)
         app = DesktopApp(root, runtime)
     except Exception as error:
         messagebox.showerror("Unable to start SaiWorks", str(error))

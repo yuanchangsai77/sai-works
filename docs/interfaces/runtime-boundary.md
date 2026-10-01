@@ -10,6 +10,8 @@
 
 Desktop V0.1a 先作为同进程单壳消费本门面，不因图形界面新建执行或存储旁路。具体产品边界和解锁条件见 [Desktop V0.1](../design/desktop-v0.md)。
 
+Runtime 的观测日志由内核生成并统一写入 `.saiworks/runs/<run_id>/`，不依赖 CLI、TUI 或 Desktop。每次运行至少可从 `events.jsonl` 核对实际模型后端、模型请求/响应（真实客户端）、工具动作和终态；`details.log` 提供脱敏的人类可读摘要。
+
 ## 交互职责地图
 
 以下六类用于核对职责，不要求恰好六个接口或服务。

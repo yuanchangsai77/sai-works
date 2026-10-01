@@ -32,6 +32,13 @@ def test_headless_factory_and_persistence_do_not_load_terminal(tmp_path, monkeyp
     assert record.state == "finished"
     assert record.result.final_message == summary.final_message
     assert runtime.load_session(session.session_id).messages[-1]["content"] == summary.final_message
+    assert any(
+        event.name == "runtime.model_backend"
+        and event.payload == {"type": "StubModelClient"}
+        for event in runtime.logger.events
+    )
+    details = tmp_path / ".saiworks" / "runs" / runtime.logger.last_run_id / "details.log"
+    assert "- model backend: StubModelClient" in details.read_text(encoding="utf-8")
     assert capsys.readouterr().out == ""
 
 
