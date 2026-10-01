@@ -17,6 +17,8 @@
 
 文档基线已提交；壳拆分 A 核对完成，B/C 同进程验收完成，具体证据见[阶段核对](design/shell-core-audit.md)。已具备无终端 Runtime、单槽串行、Task 隔离、事务接受、提交去重和统一会话收尾。阶段 D 的[同步与审批具体契约](design/runtime-sync-approval-contract.md)待确认，E 常驻与 F Companion 尚未实施。
 
+当前产品主线进入 [Desktop V0.1a](design/desktop-v0.md)：先以同进程单壳验证低门槛交互，同时保持 CLI/TUI 兼容。阶段 D 不再作为启动 Desktop 的整体前置，而是运行中换壳、重连和可恢复审批的解锁条件；阶段 E 在验证脱壳续跑需求后实施。
+
 后续文档核对重点：
 
 - 对新领域文档持续核对代码事实与故障验收证据，避免目标语义被误标为已实现。

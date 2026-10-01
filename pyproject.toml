@@ -14,6 +14,7 @@ dependencies = [
 
 [project.scripts]
 sai-works = "saiworks.__main__:main"
+sai-works-desktop = "saiworks.interaction.desktop_app:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

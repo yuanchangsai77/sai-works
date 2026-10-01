@@ -272,3 +272,11 @@ Run the test suite:
 ```bash
 PYTHONPATH=src .venv/bin/python -m pytest -q
 ```
+
+Desktop V0.1a 参考窗口使用 Python 内置 Tk，安装项目后可启动：
+
+```bash
+sai-works-desktop
+```
+
+当前为同进程单壳验证版；关闭窗口不承诺任务续跑，跨壳切换与可恢复审批仍属于后续阶段。

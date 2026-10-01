@@ -8,6 +8,8 @@
 
 已具备同进程无终端门面、单执行槽、任务接受与结果查询；跨进程 Desktop/IDE/API 的身份、可恢复审批与 revision 同步尚未实现。已有 ContextLoader、ToolProvider、ResourceProvider 属于接入扩展点，不是这里讨论的交互控制边界。
 
+Desktop V0.1a 先作为同进程单壳消费本门面，不因图形界面新建执行或存储旁路。具体产品边界和解锁条件见 [Desktop V0.1](../design/desktop-v0.md)。
+
 ## 交互职责地图
 
 以下六类用于核对职责，不要求恰好六个接口或服务。

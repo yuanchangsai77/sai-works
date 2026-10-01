@@ -46,18 +46,28 @@ class Runtime:
         self._condition = Condition()
         self._queue = deque()
         self._running = False
+        self._closed = False
 
     @contextmanager
     def execution_slot(self, ticket=None):
         with self._condition:
+            if self._closed:
+                raise RuntimeError("Runtime is closed")
             if ticket is None:
                 ticket = object()
                 self._queue.append(ticket)
                 self._condition.notify_all()
             try:
-                self._condition.wait_for(lambda: not self._running and self._queue[0] is ticket)
+                self._condition.wait_for(
+                    lambda: self._closed or (not self._running and self._queue[0] is ticket)
+                )
+                if self._closed:
+                    self._queue.remove(ticket)
+                    self._condition.notify_all()
+                    raise RuntimeError("Runtime is closed")
             except BaseException:
-                self._queue.remove(ticket)
+                if ticket in self._queue:
+                    self._queue.remove(ticket)
                 self._condition.notify_all()
                 raise
             self._queue.popleft()
@@ -65,11 +75,18 @@ class Runtime:
         try:
             yield
         finally:
+            cleanup = False
             with self._condition:
                 self._running = False
+                cleanup = self._closed
                 self._condition.notify_all()
+            if cleanup:
+                self.close_tool_state()
 
     def accept(self, request: UserRequest, *, submission_id: str):
+        with self._condition:
+            if self._closed:
+                raise RuntimeError("Runtime is closed")
         if self.task_store is None:
             raise RuntimeError("Durable acceptance requires a task store")
         if self.subagent_grant is not None:
@@ -86,6 +103,8 @@ class Runtime:
                 _session: StoredSession | None = None,
                 _defer_terminal_notification: bool = False) -> ExecutionSummary:
         with self._condition:
+            if self._closed:
+                raise RuntimeError("Runtime is closed")
             record = self.accept(request, submission_id=submission_id if submission_id is not None else uuid4().hex) if self.task_store is not None else None
             if record is not None:
                 self._retain_task_context(record.task_id)
@@ -212,6 +231,36 @@ class Runtime:
             cancel = getattr(self.engine, "cancel_current_run", None)
             if callable(cancel):
                 cancel()
+
+    @property
+    def is_running(self) -> bool:
+        with self._condition:
+            return self._running or bool(self._queue)
+
+    @property
+    def is_closed(self) -> bool:
+        with self._condition:
+            return self._closed
+
+    def close(self, *, force: bool = False) -> None:
+        """Close this facade once; active work must be cancelled before normal close."""
+        with self._condition:
+            if self._closed:
+                return
+            if (self._running or self._queue) and not force:
+                raise RuntimeError("Runtime is still running")
+            self._closed = True
+            self._condition.notify_all()
+            running = self._running
+        if running:
+            self.cancel_current_run()
+            return
+        self.close_tool_state()
+
+    def configure_interaction(self, *, approval_callback=None, progress_reporter=None) -> None:
+        """Attach shell interaction adapters without exposing engine mutation."""
+        self.engine.approval_callback = approval_callback
+        self.engine.progress_reporter = progress_reporter
 
     def run_background(self, request: UserRequest) -> ExecutionSummary:
         return self.execute(request, background=True)

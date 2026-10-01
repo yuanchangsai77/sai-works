@@ -10,6 +10,7 @@
 | [执行账本](execution-ledger.md) | 授权、执行、证据和检查点的可查询关系 | 日志、trace 与检查点 |
 | [壳与内核边界设计](shell-core-boundary.md) | 权威状态、生命周期、上下文绑定与多壳同步 | 首版行为决策已确认，B/C 运行职责已提取 |
 | [壳与内核拆分实施计划](shell-core-migration.md) | 能力映射、职责迁移、阶段验收和兼容策略 | A 核对完成，B/C 同进程验收完成；D/E/F 待实施 |
+| [Desktop V0.1](desktop-v0.md) | 同进程薄壳、D/E 解锁条件与纵向切片 | V0.1a 开始实施；GUI 技术选型暂缓 |
 | [持久化接受契约](../reference/runtime-acceptance.md) | 内部提交身份、接受事务与独立任务记录 | 已确认并实施，旧会话格式不变 |
 | [同步与审批契约提案](runtime-sync-approval-contract.md) | revision、审批有效性、continuation 与控制资格 | 待确认，未实施 |
 | [协议边界](protocol-boundaries.md) | 哪些边界需要协议及其兼容要求 | 已有模型和工具契约 |

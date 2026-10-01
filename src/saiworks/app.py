@@ -289,8 +289,10 @@ def create_app(
     presenter.engine = runtime.view()
     runtime.on_tools_changed = lambda tools: setattr(presenter, "tool_result_summarizer", tools.summarize_result)
     if not background:
-        runtime.engine.approval_callback = presenter.confirm_tool_action
-        runtime.engine.progress_reporter = presenter
+        runtime.configure_interaction(
+            approval_callback=presenter.confirm_tool_action,
+            progress_reporter=presenter,
+        )
     return CLI(
         engine=runtime.engine, presenter=presenter, logger=runtime.logger,
         session_store=runtime.session_store, subagent_coordinator=runtime.subagent_coordinator,
