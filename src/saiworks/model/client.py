@@ -278,7 +278,7 @@ class OpenAICompatibleModelClient:
                                 "model.invalid_stream",
                                 {"url": url, "request_id": request_id, "reason": str(error)},
                             )
-                        raise RuntimeError(f"Model SSE response was invalid: {error}") from error
+                        raise model_types.ModelProtocolError(f"Model SSE response was invalid: {error}") from error
                     except Exception as error:
                         if self.logger is not None:
                             self.logger.record(
@@ -360,7 +360,7 @@ class OpenAICompatibleModelClient:
                         "model.invalid_json",
                         {"url": url, "request_id": request_id, "body": body},
                     )
-                raise RuntimeError(f"Model response was not valid JSON: {body}") from error
+                raise model_types.ModelProtocolError(f"Model response was not valid JSON: {body}") from error
 
         if "choices" not in data:
             if self.logger is not None:
@@ -368,7 +368,7 @@ class OpenAICompatibleModelClient:
                     "model.invalid_shape",
                     {"url": url, "request_id": request_id, "body": data},
                 )
-            raise RuntimeError(f"Model response missing choices: {data}")
+            raise model_types.ModelProtocolError(f"Model response missing choices: {data}")
 
         return data
 

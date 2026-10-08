@@ -18,6 +18,31 @@ class DesktopSessionView:
     context_generation: int
 
 
+@dataclass(frozen=True, slots=True)
+class DesktopTaskItem:
+    session_id: str
+    title: str
+    status: str
+    updated_at: str
+    cwd: str
+
+
+@dataclass(frozen=True, slots=True)
+class DesktopDiagnosticView:
+    session_id: str
+    run_id: str
+    started_at: str
+    completed_at: str
+    outcome: str
+    event_count: int
+    turn_count: int
+    verification_phase: str
+    open_issue: str
+    recovery_hint: str
+    tool_names: tuple[str, ...]
+    log_path: str
+
+
 class DesktopController:
     """GUI-independent Desktop shell adapter over the Runtime facade.
 
@@ -49,6 +74,58 @@ class DesktopController:
         if latest is None:
             raise RuntimeError("No saved session is available")
         return self.open_workspace(latest.cwd, session_id=latest.session_id)
+
+    def resume(self, session_id: str) -> DesktopSessionView:
+        stored = self.runtime.load_session(session_id)
+        if stored is None:
+            raise RuntimeError(f"Saved task '{session_id}' is no longer available")
+        return self.open_workspace(stored.cwd, session_id=stored.session_id)
+
+    def list_tasks(self, *, cwd: str | Path | None = None) -> tuple[DesktopTaskItem, ...]:
+        target = str(Path(cwd).resolve()) if cwd is not None else None
+        items = []
+        for record in self.runtime.list_sessions():
+            if target is not None and str(Path(record.cwd).resolve()) != target:
+                continue
+            title = self._task_title(record.preview)
+            items.append(DesktopTaskItem(
+                session_id=record.session_id,
+                title=title[:64],
+                status=record.status,
+                updated_at=record.updated_at,
+                cwd=record.cwd,
+            ))
+        return tuple(items)
+
+    @staticmethod
+    def _task_title(preview: str) -> str:
+        text = preview.strip()
+        if "User request:" in text:
+            text = text.split("User request:", 1)[1]
+        return " ".join(text.split()).strip()[:64] or "Untitled task"
+
+    def diagnostics(self) -> DesktopDiagnosticView:
+        session = self._require_session()
+        latest_trace = session.trace[-1] if session.trace else None
+        resume = session.resume_state
+        run_id = latest_trace.run_id if latest_trace is not None else resume.last_run_id
+        log_path = self.runtime.run_log_path(run_id)
+        return DesktopDiagnosticView(
+            session_id=session.session_id,
+            run_id=run_id,
+            started_at=(latest_trace.started_at if latest_trace is not None else ""),
+            completed_at=(latest_trace.completed_at if latest_trace is not None else ""),
+            outcome=(latest_trace.outcome if latest_trace is not None else resume.last_outcome),
+            event_count=(latest_trace.event_count if latest_trace is not None else 0),
+            turn_count=(latest_trace.turn_count if latest_trace is not None else 0),
+            verification_phase=str(
+                latest_trace.checkpoint.phase if latest_trace is not None else resume.checkpoint.phase
+            ),
+            open_issue=resume.open_issue,
+            recovery_hint=resume.recovery_hint,
+            tool_names=tuple(latest_trace.tool_names if latest_trace is not None else resume.last_tool_names),
+            log_path=str(log_path) if log_path is not None else "",
+        )
 
     def submit(
         self,

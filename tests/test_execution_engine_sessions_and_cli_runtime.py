@@ -5,10 +5,11 @@ import pytest
 from saiworks.app import create_app
 from saiworks.interaction.cli import CLI
 from saiworks.interaction.presenter import ConsolePresenter
-from saiworks.model.types import ModelConnectionError, ModelTimeoutError
+from saiworks.model.types import ModelConnectionError, ModelProtocolError, ModelTimeoutError
 from saiworks.model.streaming import NaturalLanguageDelta
 from saiworks.observability.logger import InMemoryLogger
 from saiworks.orchestration.engine import ExecutionEngine
+from saiworks.orchestration.failures import runtime_failure_message
 from saiworks.orchestration.session import SessionContext
 from saiworks.safety.guardrails import Guardrails
 from saiworks.safety.policy import DefaultPolicy
@@ -139,7 +140,7 @@ def test_run_returns_message_when_model_request_fails(tmp_path, monkeypatch):
     app = create_app()
 
     def fail(_request):
-        raise RuntimeError("Model request failed: [Errno 111] Connection refused")
+        raise ModelConnectionError("Model request failed: [Errno 111] Connection refused")
 
     monkeypatch.setattr(app.engine, "execute_in_context", lambda request, context: fail(request))
 
@@ -149,6 +150,52 @@ def test_run_returns_message_when_model_request_fails(tmp_path, monkeypatch):
     assert "Connection refused" in summary.final_message
     assert "keep this session open and try again" in summary.final_message
     assert summary.tool_results == []
+
+
+def test_run_distinguishes_invalid_model_response_from_unavailable_api(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    app = create_app()
+
+    def fail(_request):
+        raise ModelProtocolError("Model response must contain required fields")
+
+    # Patch inside the engine boundary so the assertion covers Engine's partial
+    # failure summary as well as Runtime's fallback classification.
+    monkeypatch.setattr(app.engine, "_execute", fail)
+
+    summary = app.run(UserRequest(prompt="continue", cwd=str(tmp_path)))
+
+    assert "model responded" in summary.final_message
+    assert "could not accept its response" in summary.final_message
+    assert "API is unavailable" not in summary.final_message
+    assert summary.blockers[0].error_code == "model_protocol_error"
+
+
+def test_runtime_run_log_path_stays_within_logger_directory(tmp_path):
+    app = create_app(workspace_root=tmp_path)
+    app.runtime.logger = InMemoryLogger(base_dir=str(tmp_path / "runs"))
+
+    assert app.runtime.run_log_path("run-123") == (tmp_path / "runs" / "run-123").resolve()
+    assert app.runtime.run_log_path("../../outside") is None
+
+
+def test_wrapped_model_protocol_error_keeps_protocol_failure_message():
+    protocol_error = ModelProtocolError("response schema mismatch")
+    wrapped = RuntimeError("model invocation failed")
+    wrapped.__cause__ = protocol_error
+
+    message = runtime_failure_message(wrapped)
+
+    assert "model responded" in message
+    assert "response schema mismatch" in message
+    assert "API is unavailable" not in message
+
+
+def test_generic_runtime_error_is_not_reported_as_model_unavailable():
+    message = runtime_failure_message(RuntimeError("execution state is inconsistent"))
+
+    assert "SaiWorks Runtime could not complete this run" in message
+    assert "API is unavailable" not in message
 
 
 def test_runtime_failure_preserves_successful_tools_and_shell_checkpoint(tmp_path):

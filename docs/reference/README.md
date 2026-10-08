@@ -11,5 +11,6 @@
 | [MCP 适配](mcp-adapter.md) | 协议、名称、资源 ID、风险与大小边界 |
 | [配置](configuration.md) | 配置来源、参数、环境与现行限制 |
 | [模型传输](model-transport-contract.md) | 调用生命周期、动作通道、流式、取消与关联要求 |
+| [运行日志与会话追踪](observability.md) | run/session 文件位置、关联方法、事件阅读与安全限制 |
 
 工具和模型传输语义在本轮保持不变；仅更新归属和文档引用。模型端点责任是对接要求，实际实现与验收由端点负责。目标协议设计见[协议边界](../design/protocol-boundaries.md)。

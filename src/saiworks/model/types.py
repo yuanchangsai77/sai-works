@@ -27,6 +27,10 @@ class ModelServiceError(ModelRetryableError):
     retry_status = "Model service temporarily unavailable"
 
 
+class ModelProtocolError(RuntimeError):
+    """Raised when a received model response violates the configured protocol."""
+
+
 @dataclass(frozen=True, slots=True)
 class ModelClientConfig:
     base_url: str

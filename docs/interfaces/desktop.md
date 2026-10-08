@@ -1,6 +1,6 @@
 # Desktop 交互壳
 
-状态：V0.1a 第一纵向切片实施中。产品范围和分阶段解锁条件见 [Desktop V0.1 设计](../design/desktop-v0.md)。
+状态：V0.1a 第一纵向切片实施中。产品范围和分阶段解锁条件见 [Desktop V0.1 设计](../design/desktop-v0.md)，完整页面与体验目标见 [Desktop 产品与 UI/UX](../design/desktop-product-ux.md)。
 
 ## 当前入口
 
@@ -9,6 +9,12 @@
 `DesktopSessionView` 是面向渲染的不可变投影，当前包含会话身份、工作区、会话状态、消息和上下文代次。它不暴露 Engine、ToolRegistry、Policy 或可变 `StoredSession`。
 
 `interaction.desktop_app.DesktopApp` 是 Tk 8.6 参考窗口，通过 `sai-works-desktop` 启动。模型和工具执行位于后台线程；进度、结果和审批经由 UI 事件队列回到窗口线程。审批对话只转交决定，实际权限校验仍在 Runtime/Engine。
+
+`interaction.desktop_presenter` 是无 GUI 的展示适配层，将 Runtime 进度转换为语义化动作名称、紧凑进度卡和 Execution Rail 所需状态。它不能决定任务是否完成、审批是否有效或操作是否成功；这些事实仍以 Runtime 返回值和 trace 为准。
+
+`interaction.desktop_windows` 收纳 Quick Actions、Diagnostics 和打开日志目录等辅助窗口能力。它只消费控制器给出的只读投影和壳层回调，不直接访问 Runtime、Engine 或会话存储。
+
+当前参考窗口已按产品设计实现 Phase 1 的壳层纵向切片：两栏主界面、基于现有 session 的任务导航、紧凑运行卡、按需展开的 Activity/Execution Rail、结果与错误卡、`⌘K` Quick Actions、当前任务诊断和日志目录入口。任务导航和诊断由 `DesktopController` 聚合 Runtime 的 session/trace 投影；它不等同于阶段 D 的独立 `TaskSnapshot`、revision 订阅或完整 Artifact 查询。
 
 窗口关闭、SIGTERM 与 SIGINT 共用桌面关闭协调：先取消活动运行，收尾后关闭会话和 Runtime。超过有界等待时必须再次由用户选择继续等待或强制退出；强制退出表示仍需核对外部执行事实。
 

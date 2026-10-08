@@ -5,7 +5,7 @@ import re
 from html import unescape
 
 from ..types import ModelReply, ToolAction
-from .types import CleanedContent
+from .types import CleanedContent, ModelProtocolError
 
 
 class ModelReplyParser:
@@ -23,29 +23,29 @@ class ModelReplyParser:
             raise RuntimeError(f"Unsupported action protocol: {action_protocol}")
         choices = data.get("choices")
         if not isinstance(choices, list) or not choices:
-            raise RuntimeError(f"Model response missing choices: {data}")
+            raise ModelProtocolError(f"Model response missing choices: {data}")
 
         first = choices[0]
         if not isinstance(first, dict):
-            raise RuntimeError(f"Model choice must be an object: {first!r}")
+            raise ModelProtocolError(f"Model choice must be an object: {first!r}")
 
         message = first.get("message")
         if not isinstance(message, dict):
-            raise RuntimeError(f"Model response missing message: {data}")
+            raise ModelProtocolError(f"Model response missing message: {data}")
 
         raw_tool_calls = message.get("tool_calls")
         if raw_tool_calls:
             if action_protocol != "native_tools":
-                raise RuntimeError("Model used API tool_calls with the prompt_json action protocol")
+                raise ModelProtocolError("Model used API tool_calls with the prompt_json action protocol")
             if not isinstance(raw_tool_calls, list):
-                raise RuntimeError(f"Model tool_calls must be a list: {message!r}")
+                raise ModelProtocolError(f"Model tool_calls must be a list: {message!r}")
             content = self._normalize_nullable_content(message.get("content"))
             cleaned = self._clean_content(content)
             actions = self.parse_tool_calls(raw_tool_calls, allowed_tool_names=allowed_tool_names)
             if content.strip():
                 content_reply = self.parse_reply(content, allowed_tool_names=allowed_tool_names)
                 if content_reply.actions:
-                    raise RuntimeError("Model mixed API tool_calls and content actions")
+                    raise ModelProtocolError("Model mixed API tool_calls and content actions")
             return ModelReply(
                 message=cleaned.message or "Model requested tool calls.",
                 actions=actions,
@@ -54,11 +54,11 @@ class ModelReplyParser:
             )
 
         if "content" not in message:
-            raise RuntimeError(f"Model response missing content: {message!r}")
+            raise ModelProtocolError(f"Model response missing content: {message!r}")
 
         content = self._normalize_content(message.get("content"))
         if not content.strip():
-            raise RuntimeError(f"Model response content was empty: {message!r}")
+            raise ModelProtocolError(f"Model response content was empty: {message!r}")
         return self._parse_protocol_content(
             content,
             action_protocol=action_protocol,
@@ -75,21 +75,21 @@ class ModelReplyParser:
         try:
             payload = json.loads(content)
         except json.JSONDecodeError as error:
-            raise RuntimeError(
+            raise ModelProtocolError(
                 f"Model response must be strict JSON for the {action_protocol} action protocol"
             ) from error
         if not isinstance(payload, dict):
-            raise RuntimeError(f"Model response must be a JSON object for the {action_protocol} action protocol")
+            raise ModelProtocolError(f"Model response must be a JSON object for the {action_protocol} action protocol")
 
         required_fields = {"message", "done"}
         allowed_fields = required_fields | {"actions"}
         if not required_fields.issubset(payload) or not set(payload).issubset(allowed_fields):
             field_list = ", ".join(sorted(allowed_fields))
-            raise RuntimeError(f"Model response must contain required fields and only {field_list}")
+            raise ModelProtocolError(f"Model response must contain required fields and only {field_list}")
         if action_protocol == "prompt_json" and "actions" not in payload:
-            raise RuntimeError("Model response must contain required fields and only actions, done, message")
+            raise ModelProtocolError("Model response must contain required fields and only actions, done, message")
         if action_protocol == "native_tools" and payload.get("actions", []) != []:
-            raise RuntimeError("Model used content actions with the native_tools action protocol")
+            raise ModelProtocolError("Model used content actions with the native_tools action protocol")
         return self._build_reply(payload, allowed_tool_names=allowed_tool_names, strict=True)
 
     def parse_tool_calls(
@@ -101,18 +101,18 @@ class ModelReplyParser:
         actions: list[ToolAction] = []
         for item in raw_tool_calls:
             if not isinstance(item, dict):
-                raise RuntimeError(f"Model tool_call must be an object: {item!r}")
+                raise ModelProtocolError(f"Model tool_call must be an object: {item!r}")
 
             if item.get("type", "function") != "function":
-                raise RuntimeError(f"Unsupported tool_call type: {item!r}")
+                raise ModelProtocolError(f"Unsupported tool_call type: {item!r}")
 
             function = item.get("function")
             if not isinstance(function, dict):
-                raise RuntimeError(f"Model tool_call missing function: {item!r}")
+                raise ModelProtocolError(f"Model tool_call missing function: {item!r}")
 
             name = function.get("name")
             if not isinstance(name, str) or not name:
-                raise RuntimeError(f"Model tool_call missing function name: {item!r}")
+                raise ModelProtocolError(f"Model tool_call missing function name: {item!r}")
             self._validate_tool_name(name, allowed_tool_names)
 
             raw_arguments = function.get("arguments", {})
@@ -120,14 +120,14 @@ class ModelReplyParser:
                 try:
                     arguments = json.loads(raw_arguments or "{}")
                 except json.JSONDecodeError as error:
-                    raise RuntimeError(f"Model tool_call arguments were not valid JSON: {item!r}") from error
+                    raise ModelProtocolError(f"Model tool_call arguments were not valid JSON: {item!r}") from error
             elif isinstance(raw_arguments, dict):
                 arguments = raw_arguments
             else:
-                raise RuntimeError(f"Model tool_call arguments must be an object: {item!r}")
+                raise ModelProtocolError(f"Model tool_call arguments must be an object: {item!r}")
 
             if not isinstance(arguments, dict):
-                raise RuntimeError(f"Model tool_call arguments must decode to an object: {item!r}")
+                raise ModelProtocolError(f"Model tool_call arguments must decode to an object: {item!r}")
 
             actions.append(ToolAction(name=name, arguments=arguments))
 
@@ -207,35 +207,35 @@ class ModelReplyParser:
             if not strict and "actions" in payload:
                 message = "Model requested tool calls."
             else:
-                raise RuntimeError(f"Model response missing message: {payload}")
+                raise ModelProtocolError(f"Model response missing message: {payload}")
 
         raw_done = payload.get("done", False)
         if strict and not isinstance(raw_done, bool):
-            raise RuntimeError("Model response done must be a boolean")
+            raise ModelProtocolError("Model response done must be a boolean")
         done = bool(raw_done)
         raw_actions = payload.get("actions", [])
         if strict and not isinstance(raw_actions, list):
-            raise RuntimeError("Model response actions must be a list")
+            raise ModelProtocolError("Model response actions must be a list")
         if not isinstance(raw_actions, list):
-            raise RuntimeError(f"Model actions must be a list: {payload}")
+            raise ModelProtocolError(f"Model actions must be a list: {payload}")
 
         actions: list[ToolAction] = []
         for item in raw_actions:
             if not isinstance(item, dict):
-                raise RuntimeError(f"Model action must be an object: {item!r}")
+                raise ModelProtocolError(f"Model action must be an object: {item!r}")
 
             name = item.get("name")
             arguments = item.get("arguments", {})
             if not isinstance(name, str) or not name:
-                raise RuntimeError(f"Model action missing tool name: {item!r}")
+                raise ModelProtocolError(f"Model action missing tool name: {item!r}")
             self._validate_tool_name(name, allowed_tool_names)
             if not isinstance(arguments, dict):
-                raise RuntimeError(f"Model action arguments must be an object: {item!r}")
+                raise ModelProtocolError(f"Model action arguments must be an object: {item!r}")
 
             actions.append(ToolAction(name=name, arguments=arguments))
 
         if actions and done:
-            raise RuntimeError("Model response invariant violated: done=true requires actions to be empty")
+            raise ModelProtocolError("Model response invariant violated: done=true requires actions to be empty")
 
         cleaned = self._clean_content(message)
         return ModelReply(
@@ -258,7 +258,7 @@ class ModelReplyParser:
                         texts.append(text)
             return "\n".join(texts)
 
-        raise RuntimeError(f"Unsupported model content format: {content!r}")
+        raise ModelProtocolError(f"Unsupported model content format: {content!r}")
 
     def _normalize_nullable_content(self, content: object) -> str:
         if content is None:
@@ -267,7 +267,7 @@ class ModelReplyParser:
 
     def _validate_tool_name(self, name: str, allowed_tool_names: set[str] | None) -> None:
         if allowed_tool_names is not None and name not in allowed_tool_names:
-            raise RuntimeError(f"Model requested unknown tool: {name}")
+            raise ModelProtocolError(f"Model requested unknown tool: {name}")
 
     def _parse_content_tool_calls(
         self,

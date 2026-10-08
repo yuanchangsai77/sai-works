@@ -9,7 +9,7 @@ from typing import Iterable
 from uuid import uuid4
 
 from ..intent import RequestIntentClassifier
-from ..model.types import ModelRetryableError
+from ..model.types import ModelProtocolError, ModelRetryableError
 from ..types import (
     EvidenceRecord,
     ExecutionSummary,
@@ -21,6 +21,7 @@ from ..types import (
     WorkspaceSessionState,
 )
 from .ext import ContextLoader
+from .failures import runtime_failure_message, runtime_failure_retryability
 from .permissions import PermissionContext
 from .progress import (
     DefaultProgressPolicy,
@@ -839,15 +840,12 @@ class ExecutionEngine:
         session = self.current_session
         results = list(session.tool_results) if session is not None else []
         checkpoint = session.checkpoint if session is not None else TaskCheckpoint()
-        message = (
-            "Model API is unavailable right now. "
-            f"{error}. You can keep this session open and try again later."
-        )
+        message = runtime_failure_message(error)
         blocker = RuntimeBlocker(
             error_code=self._runtime_error_code(error),
             summary=str(error) or type(error).__name__,
             source="runtime",
-            retryability="retryable",
+            retryability=runtime_failure_retryability(error),
             required_action="resume",
         )
         if checkpoint.phase != "in_progress":
@@ -893,6 +891,8 @@ class ExecutionEngine:
     def _runtime_error_code(self, error: BaseException) -> str:
         current: BaseException | None = error
         while current is not None:
+            if isinstance(current, ModelProtocolError):
+                return "model_protocol_error"
             name = type(current).__name__
             if name == "ModelTimeoutError" or isinstance(current, TimeoutError):
                 return "model_timeout"

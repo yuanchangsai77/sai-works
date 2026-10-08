@@ -8,6 +8,7 @@ from uuid import uuid4
 
 from .orchestration.engine import ExecutionContext
 from .context.packager import ContextBudgetExceededError
+from .orchestration.failures import runtime_failure_message
 from .sessions.tasks import TaskStore
 from .sessions.coordinator import SessionCoordinator
 from .capabilities.runtime import RuntimeCapabilities
@@ -97,6 +98,16 @@ class Runtime:
 
     def get_submission(self, submission_id: str):
         return self.task_store.get_submission(submission_id) if self.task_store is not None else None
+
+    def run_log_path(self, run_id: str) -> Path | None:
+        base_dir = getattr(self.logger, "base_dir", None)
+        if not run_id or base_dir is None:
+            return None
+        root = Path(base_dir).resolve()
+        candidate = (root / run_id).resolve()
+        if not candidate.is_relative_to(root):
+            return None
+        return candidate
 
     def execute(self, request: UserRequest, *, background: bool = False,
                 submission_id: str | None = None,
@@ -376,7 +387,7 @@ class Runtime:
                 summary = partial
             else:
                 summary = ExecutionSummary(
-                    final_message=f"Model API is unavailable right now. {error}. You can keep this session open and try again later.",
+                    final_message=self._runtime_error_message(error),
                     tool_results=[], outcome="runtime_error",
                 )
             if self.logger is not None:
@@ -385,6 +396,10 @@ class Runtime:
         if self.logger is not None and not (background and request.metadata.get("defer_finalize")):
             self.logger.finalize(request, summary)
         return summary
+
+    @staticmethod
+    def _runtime_error_message(error: RuntimeError) -> str:
+        return runtime_failure_message(error)
 
     def close_tool_state(self) -> None:
         return self.sessions.close_tool_state()
