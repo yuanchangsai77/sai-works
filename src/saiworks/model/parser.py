@@ -29,6 +29,10 @@ class ModelReplyParser:
         if not isinstance(first, dict):
             raise ModelProtocolError(f"Model choice must be an object: {first!r}")
 
+        finish_reason = first.get("finish_reason")
+        if finish_reason not in (None, "stop", "tool_calls"):
+            raise ModelProtocolError(f"Model response did not finish normally: {finish_reason!r}")
+
         message = first.get("message")
         if not isinstance(message, dict):
             raise ModelProtocolError(f"Model response missing message: {data}")
@@ -59,6 +63,8 @@ class ModelReplyParser:
         content = self._normalize_content(message.get("content"))
         if not content.strip():
             raise ModelProtocolError(f"Model response content was empty: {message!r}")
+        if finish_reason == "tool_calls":
+            raise ModelProtocolError("Model response ended with tool_calls but supplied no tool calls")
         return self._parse_protocol_content(
             content,
             action_protocol=action_protocol,
@@ -75,6 +81,16 @@ class ModelReplyParser:
         try:
             payload = json.loads(content)
         except json.JSONDecodeError as error:
+            if action_protocol == "native_tools" and not self._looks_like_json_reply(content):
+                cleaned = self._clean_content(content)
+                message = cleaned.message if cleaned.had_protocol_tags else content.strip()
+                if not message:
+                    raise ModelProtocolError("Model response contained no user-facing answer") from error
+                return ModelReply(
+                    message=message,
+                    done=True,
+                    metadata=self._cleaned_metadata(cleaned),
+                )
             raise ModelProtocolError(
                 f"Model response must be strict JSON for the {action_protocol} action protocol"
             ) from error

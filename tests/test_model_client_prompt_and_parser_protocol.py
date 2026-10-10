@@ -669,6 +669,7 @@ def test_prompt_declares_one_executable_action_protocol():
     assert "Executable action protocol: native_tools" in native_system
     assert "Use only API tool_calls for actions" in native_system
     assert "never put executable actions in content" in native_system
+    assert "Answer in natural language in content" in native_system
 
     prompt_json = SessionContext(
         request=UserRequest(
@@ -979,13 +980,59 @@ def test_prompt_json_protocol_rejects_nonconforming_content(content):
         parser.parse_response(data, action_protocol="prompt_json")
 
 
-@pytest.mark.parametrize("content", ["plain text", '{"message":"done","done":"false"}'])
+@pytest.mark.parametrize("content", ['{"message":"done","done":"false"}', '{"message":'])
 def test_native_protocol_rejects_nonconforming_content(content):
     parser = ModelReplyParser()
     data = {"choices": [{"message": {"content": content}}]}
 
     with pytest.raises(RuntimeError):
         parser.parse_response(data, action_protocol="native_tools")
+
+
+@pytest.mark.parametrize("content", [
+    "你好，模型已经连接。",
+    'Example: {"actions":[{"name":"shell_exec","arguments":{}}]}',
+    '```python\nprint("hello")\n```',
+    '```python\nif True:\n    print("hello")\n```',
+    'HTML 示例：<div class="card">hello</div>',
+])
+def test_native_protocol_accepts_natural_language_without_executing_content(content):
+    reply = ModelReplyParser().parse_response({"choices": [{
+        "finish_reason": "stop", "message": {"content": content},
+    }]})
+    assert reply.message == content
+    assert reply.done is True
+    assert reply.actions == []
+
+
+@pytest.mark.parametrize("finish_reason", ["length", "content_filter", "error", "tool_calls"])
+def test_native_protocol_rejects_incomplete_text(finish_reason):
+    with pytest.raises(RuntimeError):
+        ModelReplyParser().parse_response({"choices": [{
+            "finish_reason": finish_reason, "message": {"content": "partial answer"},
+        }]})
+
+
+def test_native_protocol_preserves_strict_json_completion_state():
+    reply = ModelReplyParser().parse_response({"choices": [{
+        "message": {"content": '{"message":"still working","done":false}'},
+    }]})
+    assert reply.done is False
+    assert reply.actions == []
+
+
+@pytest.mark.parametrize("content", ["   ", "<think>private reasoning</think>"])
+def test_native_protocol_rejects_answers_without_visible_content(content):
+    with pytest.raises(RuntimeError):
+        ModelReplyParser().parse_response({"choices": [{"message": {"content": content}}]})
+
+
+def test_native_protocol_never_executes_legacy_content_tool_tags():
+    reply = ModelReplyParser().parse_response({"choices": [{"message": {"content":
+        'Example only. <invoke tool="shell_exec"><parameter name="command">pwd</parameter></invoke>'
+    }}]})
+    assert reply.message == "Example only."
+    assert reply.actions == []
 
 
 def test_parse_reply_converts_xmlish_content_tool_call():

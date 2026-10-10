@@ -88,8 +88,8 @@ class ModelPromptBuilder:
                     else "- Use only the strict JSON content schema for actions; do not emit API tool_calls."
                 ),
                 (
-                    '- Content answers must be JSON with {"message":"string","done":true}. '
-                    "A tool call is the only action channel."
+                    '- Answer in natural language in content. A tool call is the only action channel. '
+                    'A final answer ends this model turn; the runtime verifies task completion.'
                     if action_protocol == "native_tools"
                     else 'Use {"message":"string","done":true|false,"actions":[{"name":"tool_name","arguments":{}}]}. '
                     "When done=true, actions must be empty."
