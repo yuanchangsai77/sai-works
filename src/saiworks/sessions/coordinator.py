@@ -277,15 +277,19 @@ class SessionCoordinator:
                         _defer_terminal_notification=True,
                     )
                 except KeyboardInterrupt:
-                    self.save_interrupted_session(session)
-                    self.runtime._notify_terminal(self.runtime.last_summary, background=False)
+                    delivered = self.runtime._deliver_submission(
+                        submission_id, lambda: self.save_interrupted_session(session))
+                    if delivered:
+                        self.runtime._notify_terminal(self.runtime.last_summary, background=False)
                     raise
-                self.append_turn_and_persist(request, prompt, summary, session, conversation, context_generation)
+                delivered = self.runtime._deliver_submission(submission_id, lambda: self.append_turn_and_persist(
+                    request, prompt, summary, session, conversation, context_generation))
                 if session.cluster_id and self.subagent_coordinator is not None:
                     self.subagent_coordinator.update_member_state(
                         session, self._cluster_state_for_outcome(summary.outcome)
                     )
-                self.runtime._notify_terminal(summary, background=False)
+                if delivered:
+                    self.runtime._notify_terminal(summary, background=False)
                 return summary
 
         return self.runtime.execute(request)

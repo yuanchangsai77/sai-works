@@ -51,7 +51,8 @@ class TaskRecord:
     run_ids: list[str]
     result: ExecutionSummary | None = None
     error: str | None = None
-    schema_version: int = 1
+    schema_version: int = 2
+    delivery_state: str = "unknown"
 
     def request(self) -> UserRequest:
         context = json.loads(_json(self.bound_context))
@@ -65,6 +66,15 @@ class TaskRecord:
         return UserRequest(context["prompt"], context["cwd"], metadata)
 
 
+@dataclass(frozen=True, slots=True)
+class TaskSnapshot:
+    task_id: str
+    revision: int
+    state: str
+    current_submission_id: str
+    submissions: tuple[TaskRecord, ...]
+
+
 class TaskStore:
     """Atomic acceptance and attempt ownership, independent of legacy session JSON.
 
@@ -76,14 +86,26 @@ class TaskStore:
         self.path = Path(path)
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute("PRAGMA user_version").fetchone()[0] not in (0, 1, 2):
+                raise ValueError("Unsupported task database version")
             connection.execute("""CREATE TABLE IF NOT EXISTS tasks (
                 submission_id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
                 session_id TEXT NOT NULL, request_fingerprint TEXT NOT NULL,
                 bound_context TEXT NOT NULL, state TEXT NOT NULL,
                 run_ids TEXT NOT NULL DEFAULT '[]', result TEXT, error TEXT,
-                schema_version INTEGER NOT NULL DEFAULT 1
+                schema_version INTEGER NOT NULL DEFAULT 2
             )""")
             connection.execute("CREATE INDEX IF NOT EXISTS tasks_identity ON tasks(task_id)")
+            if connection.execute("SELECT 1 FROM tasks WHERE schema_version NOT IN (1, 2) LIMIT 1").fetchone():
+                raise ValueError("Unsupported task record version")
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(tasks)")}
+            if "delivery_state" not in columns:
+                connection.execute("ALTER TABLE tasks ADD COLUMN delivery_state TEXT NOT NULL DEFAULT 'unknown'")
+            connection.execute("CREATE TABLE IF NOT EXISTS task_revisions (task_id TEXT PRIMARY KEY, revision INTEGER NOT NULL)")
+            connection.execute("INSERT OR IGNORE INTO task_revisions SELECT DISTINCT task_id, 1 FROM tasks")
+            connection.execute("UPDATE tasks SET schema_version=2 WHERE schema_version=1")
+            connection.execute("PRAGMA user_version=2")
 
     def _connect(self):
         connection = sqlite3.connect(self.path, timeout=30)
@@ -95,12 +117,45 @@ class TaskStore:
     def _record(row) -> TaskRecord | None:
         if row is None:
             return None
-        if row["schema_version"] != 1:
+        if row["schema_version"] not in (1, 2):
             raise ValueError("Unsupported task record version")
         result = _restore(ExecutionSummary, json.loads(row["result"])) if row["result"] else None
         return TaskRecord(row["task_id"], row["submission_id"], row["session_id"],
                           row["request_fingerprint"], json.loads(row["bound_context"]),
-                          row["state"], json.loads(row["run_ids"]), result, row["error"])
+                          row["state"], json.loads(row["run_ids"]), result, row["error"],
+                          row["schema_version"], row["delivery_state"])
+
+    @staticmethod
+    def _bump(connection, task_id: str) -> None:
+        connection.execute("""INSERT INTO task_revisions VALUES (?, 1)
+            ON CONFLICT(task_id) DO UPDATE SET revision=revision+1""", (task_id,))
+
+    def snapshot(self, task_id: str) -> TaskSnapshot:
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN")
+            revision = connection.execute("SELECT revision FROM task_revisions WHERE task_id=?", (task_id,)).fetchone()
+            if revision is None:
+                raise KeyError(task_id)
+            records = tuple(self._record(row) for row in connection.execute(
+                "SELECT * FROM tasks WHERE task_id=? ORDER BY rowid", (task_id,)))
+            current = next((record for record in records if record.state == "running"), None)
+            current = current or next((record for record in records if record.state == "queued"), records[-1])
+            return TaskSnapshot(task_id, revision[0], current.state, current.submission_id, records)
+
+    def set_delivery_state(self, submission_id: str, state: str) -> None:
+        if state not in ("pending", "completed"):
+            raise ValueError("Invalid delivery state")
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            row = connection.execute("SELECT task_id, state, delivery_state FROM tasks WHERE submission_id=?", (submission_id,)).fetchone()
+            if row is None:
+                raise KeyError(submission_id)
+            if row["delivery_state"] == state or row["delivery_state"] == "completed":
+                return
+            if state == "completed" and row["state"] not in ("finished", "cancelled"):
+                raise RuntimeError("Execution result is not committed")
+            connection.execute("UPDATE tasks SET delivery_state=? WHERE submission_id=?", (state, submission_id))
+            self._bump(connection, row["task_id"])
 
     def accept(self, request: UserRequest, *, submission_id: str, task_id: str | None = None) -> TaskRecord:
         if not isinstance(submission_id, str) or not submission_id.strip():
@@ -122,10 +177,11 @@ class TaskStore:
                 if task_id and connection.execute("SELECT 1 FROM tasks WHERE task_id=? AND state='running'", (task_id,)).fetchone():
                     raise RuntimeError("Task has an unfinished attempt requiring explicit recovery")
                 connection.execute("""INSERT INTO tasks
-                    (submission_id, task_id, session_id, request_fingerprint, bound_context, state)
-                    VALUES (?, ?, ?, ?, ?, 'queued')""",
+                    (submission_id, task_id, session_id, request_fingerprint, bound_context, state, schema_version, delivery_state)
+                    VALUES (?, ?, ?, ?, ?, 'queued', 2, 'not_required')""",
                     (submission_id, task_id or uuid4().hex, str(request.metadata.get("session_id") or ""), fingerprint, encoded))
                 record = self._record(connection.execute("SELECT * FROM tasks WHERE submission_id=?", (submission_id,)).fetchone())
+                self._bump(connection, record.task_id)
         return record
 
     def get_submission(self, submission_id: str) -> TaskRecord | None:
@@ -134,7 +190,11 @@ class TaskStore:
 
     def claim(self, submission_id: str) -> bool:
         with closing(self._connect()) as connection, connection:
-            return connection.execute("UPDATE tasks SET state='running' WHERE submission_id=? AND state='queued'", (submission_id,)).rowcount == 1
+            changed = connection.execute("UPDATE tasks SET state='running' WHERE submission_id=? AND state='queued'", (submission_id,)).rowcount == 1
+            if changed:
+                task_id = connection.execute("SELECT task_id FROM tasks WHERE submission_id=?", (submission_id,)).fetchone()[0]
+                self._bump(connection, task_id)
+            return changed
 
     def finish(self, submission_id: str, summary: ExecutionSummary | None, *, run_id: str | None = None, error: str | None = None) -> None:
         encoded = _json(summary) if summary is not None else None
@@ -145,3 +205,5 @@ class TaskStore:
                 (state, encoded, error, _json([run_id] if run_id else []), submission_id)).rowcount
             if changed != 1:
                 raise RuntimeError("Task attempt is not running")
+            task_id = connection.execute("SELECT task_id FROM tasks WHERE submission_id=?", (submission_id,)).fetchone()[0]
+            self._bump(connection, task_id)

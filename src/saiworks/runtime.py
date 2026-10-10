@@ -3,14 +3,15 @@ from __future__ import annotations
 from collections import deque
 from contextlib import contextmanager
 from pathlib import Path
-from threading import Condition
+from threading import Condition, RLock
 from uuid import uuid4
 
 from .orchestration.engine import ExecutionContext
 from .context.packager import ContextBudgetExceededError
 from .orchestration.failures import runtime_failure_message
-from .sessions.tasks import TaskStore
+from .sessions.tasks import TaskSnapshot, TaskStore
 from .sessions.coordinator import SessionCoordinator
+from .runtime_observation import TaskAccess, TaskWatch
 from .capabilities.runtime import RuntimeCapabilities
 from .types import ExecutionSummary, SessionRecord, StoredSession, UserRequest, WorkspaceSessionState
 
@@ -48,6 +49,67 @@ class Runtime:
         self._queue = deque()
         self._running = False
         self._closed = False
+        self._task_access = {}
+        self._delivery_lock = RLock()
+        self._saved_deliveries = set()
+
+    def grant_task_access(self, task_id: str) -> TaskAccess:
+        """Trusted local owner entry; never expose capability issuance to clients."""
+        with self._condition:
+            if self._closed:
+                raise RuntimeError("Runtime is closed")
+            if self.task_store is None:
+                raise RuntimeError("Task observation requires a task store")
+            store = self.task_store
+        store.snapshot(task_id)
+        with self._condition:
+            if self._closed:
+                raise RuntimeError("Runtime is closed")
+            access = TaskAccess()
+            self._task_access[access] = task_id
+            return access
+
+    def revoke_task_access(self, access: TaskAccess) -> None:
+        with self._condition:
+            if type(access) is not TaskAccess:
+                raise PermissionError("Invalid task observation access")
+            self._task_access.pop(access, None)
+
+    def snapshot(self, access: TaskAccess) -> TaskSnapshot:
+        with self._condition:
+            if self._closed or type(access) is not TaskAccess or access not in self._task_access:
+                raise PermissionError("Task observation access is unavailable")
+            task_id = self._task_access[access]
+            store = self.task_store
+        snapshot = store.snapshot(task_id)
+        with self._condition:
+            if self._closed or access not in self._task_access:
+                raise PermissionError("Task observation access is unavailable")
+        return snapshot
+
+    def watch(self, access: TaskAccess, after_revision: int | None = None) -> TaskWatch:
+        snapshot = self.snapshot(access)
+        if after_revision is not None and (type(after_revision) is not int or not 0 <= after_revision <= snapshot.revision):
+            raise ValueError("Invalid task revision")
+        return TaskWatch(self, access, after_revision)
+
+    def _complete_delivery(self, submission_id: str) -> None:
+        if self.task_store is not None and self.task_store.get_submission(submission_id) is not None:
+            self.task_store.set_delivery_state(submission_id, "completed")
+
+    def _deliver_submission(self, submission_id: str, save) -> bool:
+        """Retry a failed marker without repeating a successful local save."""
+        with self._delivery_lock:
+            record = self.get_submission(submission_id)
+            if record is not None and record.delivery_state == "completed":
+                self._saved_deliveries.discard(submission_id)
+                return False
+            if submission_id not in self._saved_deliveries:
+                save()
+                self._saved_deliveries.add(submission_id)
+            self._complete_delivery(submission_id)
+            self._saved_deliveries.discard(submission_id)
+            return True
 
     @contextmanager
     def execution_slot(self, ticket=None):
@@ -141,6 +203,8 @@ class Runtime:
             claimed = False
             try:
                 current = self.task_store.get_submission(record.submission_id)
+                if _defer_terminal_notification or (background and request.metadata.get("defer_finalize")):
+                    self.task_store.set_delivery_state(record.submission_id, "pending")
                 if current.result is not None:
                     return current.result
                 if not self.task_store.claim(record.submission_id):
@@ -261,6 +325,7 @@ class Runtime:
             if (self._running or self._queue) and not force:
                 raise RuntimeError("Runtime is still running")
             self._closed = True
+            self._task_access.clear()
             self._condition.notify_all()
             running = self._running
         if running:
@@ -298,25 +363,27 @@ class Runtime:
         except KeyboardInterrupt:
             summary = self.last_summary
             if isinstance(summary, ExecutionSummary):
-                self.persist_run(
+                delivered = self._deliver_submission(submission_id, lambda: self.persist_run(
                     session,
                     request.prompt,
                     summary,
                     model_user_content=request.metadata.get("last_session_user_message"),
                     status=status,
                     close_runtime=close_runtime,
-                )
-                self._notify_terminal(summary, background=False)
+                ))
+                if delivered:
+                    self._notify_terminal(summary, background=False)
             raise
-        self.persist_run(
+        delivered = self._deliver_submission(submission_id, lambda: self.persist_run(
             session,
             request.prompt,
             summary,
             model_user_content=request.metadata.get("last_session_user_message"),
             status=status,
             close_runtime=close_runtime,
-        )
-        self._notify_terminal(summary, background=False)
+        ))
+        if delivered:
+            self._notify_terminal(summary, background=False)
         return summary
 
     def _execute(self, request: UserRequest, *, background: bool, context: ExecutionContext | None = None, session=None) -> ExecutionSummary:
@@ -476,8 +543,9 @@ class Runtime:
             if record.result is None:
                 self.task_store.finish(submission_id, summary,
                                        run_id=getattr(self.logger, "last_run_id", None))
-            self.sessions.persist_run(session, prompt, summary, model_user_content=model_user_content,
-                                      status=status, close_runtime=close_runtime)
+            self._deliver_submission(submission_id, lambda: self.sessions.persist_run(
+                session, prompt, summary, model_user_content=model_user_content,
+                status=status, close_runtime=close_runtime))
             self._release_task_context(record.task_id)
             self._pending_submission = None
             return None

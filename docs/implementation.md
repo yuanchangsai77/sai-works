@@ -6,7 +6,7 @@
 
 当前系统是以本地软件项目为主要场景的 Agent Harness：有模型—工具循环、会话持久化、能力按需激活、执行审批、证据与恢复机制。它已有执行内核基础，但尚不是通用的远程 Execution Platform 或 Distributed Agent Runtime。
 
-CLI 与 TUI 共用执行引擎，TUI 通过展示适配接入。现有应用入口保留 CLI 兼容适配，另有无终端 Runtime 装配。运行、会话、压缩、命令激活和收尾已迁入 Runtime；独立任务库提供事务接受与提交去重。单实例串行执行，Task 的取消上下文和工具执行实例隔离。可恢复审批、多端 revision 同步与常驻服务仍待实施。
+CLI 与 TUI 共用执行引擎，TUI 通过展示适配接入。现有应用入口保留 CLI 兼容适配，另有无终端 Runtime 装配。运行、会话、压缩、命令激活和收尾已迁入 Runtime；独立任务库提供事务接受与提交去重。单实例串行执行，Task 的取消上下文和工具执行实例隔离。D1 已增加同进程 Task 快照、持久化修订、多观察者和可撤销观察资格，并区分执行结果与会话交付状态；现行接口见[任务观察](reference/runtime-observation.md)。各壳迁移、可恢复审批、跨进程同步与常驻服务仍待实施。
 
 Desktop V0.1a 新增 GUI 无关的 `DesktopController`：它仅保持壳本地的当前会话与展示投影，工作区打开、会话恢复、任务提交、取消和关闭均调用 Runtime 门面。它不暴露 Engine、ToolRegistry 或 Policy，不创建第二套会话与任务存储。`desktop_presenter` 只负责语义动作名称、审批文案和 Activity 展示状态，`desktop_windows` 负责 Quick Actions、Diagnostics 和日志目录入口；二者都不持有 Runtime 权威状态。`DesktopApp` 使用内置 Tk 8.6 提供参考窗口，已接通工作区、基于 session 的任务导航、后台执行、紧凑进度卡、按需 Activity、审批、取消、结果卡、Quick Actions 与当前 run 诊断；尚无阶段 D TaskSnapshot/revision、完整 Artifact 查看，也未经生产打包、签名、更新与完整视觉/无障碍验收。
 

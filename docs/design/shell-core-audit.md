@@ -1,6 +1,6 @@
 # 壳与内核拆分：阶段核对与实施证据
 
-日期：2026-10-01。设计基线提交：e70e525。A 核对完成，B/C 的同进程职责迁移与 R1–R3 可靠性验收完成；D/E/F 未实施。无网络 API、无常驻续跑或断线审批承诺。
+历史基线日期：2026-10-01。设计基线提交：e70e525。A 核对完成，B/C 的同进程职责迁移与 R1–R3 可靠性验收完成。2026-10-10 新增 D1 同进程任务观察，证据见第 5 节；D2/D3/E/F 未实施。无网络 API、无常驻续跑或断线审批承诺。
 
 ## 1. 规范与设计审查
 
@@ -43,3 +43,18 @@ B/C 相关套件：headless runtime、engine/session/CLI、subagent、CLI entryp
 - Companion 的全局快捷键、工作区输入、审批和重连界面在 F 实施。
 
 下一步按[阶段 D 契约提案](runtime-sync-approval-contract.md)确认新增查询字段、审批与 continuation 存储语义，再实施 D；具体发布入口和跨进程协议按 E 门槛单独确认。
+
+## 5. D1 同进程任务观察（2026-10-10）
+
+本轮按用户要求同时修改代码和文档。现行接口归[任务观察参考](../reference/runtime-observation.md)，后续审批设计继续归阶段 D 提案，未将整个 D 标为完成。
+
+- TaskStore 事务升级版本 2，按 Task 聚合有序提交；接受、执行 claim、结果提交及交付标记与 Task revision 同事务更新。快照使用显式读取事务，保证修订与状态一致。
+- Runtime 增加可信装配方授予及撤销的仅观察句柄、完整快照和独立观察游标。游标仅保留修订位置，慢客户端不积累通知队列，也不在执行线程运行客户端回调；缺口返回完整快照并要求重新同步。
+- 区分执行结果与会话交付。会话保存失败保留 pending；成功记录 completed 后再通知旧观察回调。会话保存成功、交付标记失败时抑制完成通知并保留待核对状态，不宣称跨库原子提交。
+- 新增 16 项行为测试：提交聚合及副本隔离、多观察者与资格校验、快照/观察衔接及关闭失效、修订失败回滚、会话保存失败后不重执行、交付标记失败及重复调用不重复保存、升级提交失败回滚、旧记录升级及未来版本拒绝、并发快照一致性、慢读取期间撤销、四类错误句柄、单次持久化入口的标记补交付，以及两个观察者跟随实际 Runtime 执行到同一终态。
+
+验证命令：`PYTHONPATH=src .venv/bin/python -m pytest tests/test_runtime_observation.py tests/test_headless_runtime.py tests/test_desktop_controller.py tests/test_execution_engine_sessions_and_cli_runtime.py tests/test_subagent_session_clusters.py tests/test_app_cli_entrypoint_dispatch.py tests/test_slash_commands.py -q`，238 项通过。另运行 TUI 与会话生命周期套件，43 项通过、1 项失败。失败为 TUI 斜杠补全数量断言，已在临时目录导出当前 HEAD 后独立复现，属于既有失败。本轮合计 281 项通过、1 项既有失败；未运行全量测试，不把历史全量结果作为本轮结果。
+
+审查修复：快照数据库读取移出调度锁，读取前后检查资格，避免慢读取拖延控制并防止撤销期间继续返回数据。成功保存会话后、交付标记失败的同进程重试仅补标记，不重复追加消息；completed 提交重复调用不再次保存或通知。该补交付凭据只存在于当前 Runtime，重启后的 pending 仍需核对。新观察接口尚未整体接入各壳，D2 具体协商项已补入提案，未提前实施审批范围或数据库变化。
+
+范围限制：各壳仍使用旧进度与同步审批入口，D3 尚未迁移；审批挂起、TTL、continuation、按 Task 取消及控制资格在 D2；轮询游标只供同进程使用，不保证跨进程接入或常驻续跑。下一步先确认 D2 动作批准范围、可恢复状态和调度契约，再实施。

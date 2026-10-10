@@ -6,7 +6,7 @@
 
 应用提供无终端的 Runtime 装配，现有应用入口继续返回 CLI 适配。CLI/TUI 调用 Runtime 协调运行、会话、压缩、能力和政策；显示与补全消费脱离内核可变对象的查询投影。运行进度复用既有抽象；审批仍通过同步回调适配。子代理工厂直接装配独立 Runtime。
 
-已具备同进程无终端门面、单执行槽、任务接受与结果查询；跨进程 Desktop/IDE/API 的身份、可恢复审批与 revision 同步尚未实现。已有 ContextLoader、ToolProvider、ResourceProvider 属于接入扩展点，不是这里讨论的交互控制边界。
+已具备同进程无终端门面、单执行槽、任务接受与结果查询，以及 D1 的 Task 一致快照、持久化 revision 和多观察者游标；具体入口见[任务观察参考](../reference/runtime-observation.md)。现有壳尚未整体迁移到新观察接口，跨进程 Desktop/IDE/API 的身份、可恢复审批与服务生命周期仍未实现。已有 ContextLoader、ToolProvider、ResourceProvider 属于接入扩展点，不是这里讨论的交互控制边界。
 
 Desktop V0.1a 先作为同进程单壳消费本门面，不因图形界面新建执行或存储旁路。具体产品边界和解锁条件见 [Desktop V0.1](../design/desktop-v0.md)。
 

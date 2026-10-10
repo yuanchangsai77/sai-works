@@ -8,7 +8,7 @@
 
 ## 首版记录
 
-每条任务记录使用 schema_version=1，包含 task_id、submission_id、session_id（可空）、request_fingerprint、bound_context、state、run_ids、result 和 error。result 保存完整终态汇总及其现有 artifact 引用；error 保存异常类型，诊断细节仍归运行日志。bound_context 保存规范化工作区身份、完整输入和已绑定上下文引用；文件路径继续表示执行时读取，提交时内容保证必须使用快照或版本引用。
+B/C 原始任务记录使用 schema_version=1，包含 task_id、submission_id、session_id（可空）、request_fingerprint、bound_context、state、run_ids、result 和 error。D1 增量升级为版本 2，增加交付状态和每 Task 修订记录，升级及查询语义见[任务观察参考](runtime-observation.md)。result 保存完整终态汇总及其现有 artifact 引用；error 保存异常类型，诊断细节仍归运行日志。bound_context 保存规范化工作区身份、完整输入和已绑定上下文引用；文件路径继续表示执行时读取，提交时内容保证必须使用快照或版本引用。
 
 使用独立 SQLite 文件保存任务记录，以事务和 submission_id 唯一约束完成身份、绑定上下文与去重记录的原子接受。submission_id 在单用户 Runtime 存储范围内唯一；记录首版不自动清理。相同 id、相同指纹返回原任务；相同 id、不同指纹以内部 ValueError 拒绝，不新增跨方错误码。Accepted 后才能排队执行。
 
