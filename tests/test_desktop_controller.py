@@ -1,6 +1,7 @@
 from dataclasses import FrozenInstanceError
 from queue import Queue
 from threading import Event, Lock, Thread
+from types import SimpleNamespace
 
 import pytest
 
@@ -17,6 +18,7 @@ from saiworks.interaction.desktop_windows import (
     elapsed_time_label,
     filter_quick_actions,
     open_run_logs,
+    show_approval_dialog,
 )
 from saiworks.runtime import Runtime
 from saiworks.sessions import SessionStore
@@ -389,6 +391,65 @@ def test_desktop_approval_dialog_close_is_idempotent():
     assert decisions == [False]
     assert window.releases == 1
     assert window.destroys == 1
+
+
+@pytest.mark.parametrize("approved", [False, True])
+def test_approval_waits_for_visible_window_and_ignores_late_map(approved):
+    class Widget:
+        def __init__(self, *_args, **_kwargs):
+            self.bindings = {}
+            self.visible = False
+            self.grabs = 0
+            self.focuses = 0
+
+        def __getattr__(self, _name):
+            return lambda *_args, **_kwargs: None
+
+        def bind(self, event, callback):
+            self.bindings[event] = callback
+
+        def winfo_viewable(self):
+            return self.visible
+
+        def grab_set(self):
+            assert self.visible, "grab failed: window not viewable"
+            self.grabs += 1
+
+        def focus_set(self):
+            self.focuses += 1
+
+    toolkit = SimpleNamespace(Toplevel=Widget, Text=Widget, Label=Widget, Frame=Widget, Button=Widget)
+    decisions = []
+    dialog = show_approval_dialog(None, toolkit, toolkit, "Review action", decisions.append)
+    window = dialog.window
+    on_map = window.bindings["<Map>"]
+    assert (window.grabs, window.focuses) == (0, 0)
+
+    on_map(SimpleNamespace(widget=window))
+    window.visible = True
+    on_map(SimpleNamespace(widget=Widget()))
+    assert (window.grabs, window.focuses) == (0, 0)
+
+    on_map(SimpleNamespace(widget=window))
+    assert (window.grabs, window.focuses) == (1, 1)
+    dialog.close(approved)
+    on_map(SimpleNamespace(widget=window))
+    assert (window.grabs, window.focuses) == (1, 1)
+    assert decisions == [approved]
+
+
+def test_approval_can_close_before_window_is_visible():
+    class Window:
+        def grab_release(self):
+            raise RuntimeError("No grab yet")
+
+        def destroy(self):
+            pass
+
+    decisions = []
+    dialog = ApprovalDialog(Window(), decisions.append)
+    dialog.close(False)
+    assert decisions == [False]
 
 
 def test_desktop_elapsed_time_handles_incompatible_timezones():

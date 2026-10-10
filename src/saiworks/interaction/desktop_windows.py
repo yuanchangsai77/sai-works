@@ -138,8 +138,14 @@ def show_approval_dialog(
     ).grid(row=0, column=2)
     window.protocol("WM_DELETE_WINDOW", lambda: dialog.close(False))
     window.bind("<Escape>", lambda _event: dialog.close(False))
-    window.grab_set()
-    window.focus_set()
+
+    def on_map(event) -> None:
+        if event.widget is not window or dialog.closed or not window.winfo_viewable():
+            return
+        window.grab_set()
+        window.focus_set()
+
+    window.bind("<Map>", on_map)
     return dialog
 
 
