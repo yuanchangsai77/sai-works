@@ -9,9 +9,10 @@ from uuid import uuid4
 from .orchestration.engine import ExecutionContext
 from .context.packager import ContextBudgetExceededError
 from .orchestration.failures import runtime_failure_message
-from .sessions.tasks import TaskSnapshot, TaskStore
+from .sessions.tasks import ApprovalRecord, TaskSnapshot, TaskStore
 from .sessions.coordinator import SessionCoordinator
 from .runtime_observation import TaskAccess, TaskWatch
+from .runtime_control import TaskControl
 from .capabilities.runtime import RuntimeCapabilities
 from .types import ExecutionSummary, SessionRecord, StoredSession, UserRequest, WorkspaceSessionState
 
@@ -24,7 +25,8 @@ class Runtime:
     """
 
     def __init__(self, engine, logger=None, session_store=None,
-                 subagent_coordinator=None, subagent_runner=None, subagent_grant=None, task_store=None):
+                 subagent_coordinator=None, subagent_runner=None, subagent_grant=None, task_store=None,
+                 approval_ttl_seconds: int = 300):
         self.engine = engine
         self.logger = logger
         self.session_store = session_store
@@ -32,6 +34,7 @@ class Runtime:
         self.subagent_runner = subagent_runner
         self.subagent_grant = subagent_grant
         self.task_store = task_store
+        self.approval_ttl_seconds = approval_ttl_seconds
         self.sessions = SessionCoordinator(self)
         self.capabilities = RuntimeCapabilities(self)
         self.execution_factory = None
@@ -50,6 +53,7 @@ class Runtime:
         self._running = False
         self._closed = False
         self._task_access = {}
+        self._task_control = {}
         self._delivery_lock = RLock()
         self._saved_deliveries = set()
 
@@ -92,6 +96,114 @@ class Runtime:
         if after_revision is not None and (type(after_revision) is not int or not 0 <= after_revision <= snapshot.revision):
             raise ValueError("Invalid task revision")
         return TaskWatch(self, access, after_revision)
+
+    def grant_task_control(self, task_id: str, permissions, *, actor: str = "local") -> TaskControl:
+        """Trusted local owner entry; never expose control issuance to clients."""
+        granted = frozenset(permissions)
+        if not granted or granted - {"cancel", "approve"}:
+            raise ValueError("Unknown task control permission")
+        with self._condition:
+            if self._closed:
+                raise RuntimeError("Runtime is closed")
+            if self.task_store is None:
+                raise RuntimeError("Task control requires a task store")
+            store = self.task_store
+        store.snapshot(task_id)
+        with self._condition:
+            if self._closed:
+                raise RuntimeError("Runtime is closed")
+            control = TaskControl()
+            self._task_control[control] = (task_id, granted, str(actor))
+            return control
+
+    def revoke_task_control(self, control: TaskControl) -> None:
+        with self._condition:
+            if type(control) is not TaskControl:
+                raise PermissionError("Invalid task control")
+            self._task_control.pop(control, None)
+
+    def _require_control(self, control: TaskControl, permission: str) -> tuple[str, str]:
+        with self._condition:
+            if self._closed or type(control) is not TaskControl or control not in self._task_control:
+                raise PermissionError("Task control is unavailable")
+            task_id, permissions, actor = self._task_control[control]
+        if permission not in permissions:
+            raise PermissionError(f"Task control lacks {permission!r} permission")
+        return task_id, actor
+
+    def request_approval(
+        self,
+        submission_id: str,
+        action_name: str,
+        arguments: dict,
+        *,
+        required_scope: str,
+        now=None,
+    ) -> ApprovalRecord:
+        """Owner-level approval creation; shells never create approval records."""
+        with self._condition:
+            if self._closed:
+                raise RuntimeError("Runtime is closed")
+            if self.task_store is None:
+                raise RuntimeError("Approval records require a task store")
+            store = self.task_store
+        submission = store.get_submission(submission_id)
+        if submission is None:
+            raise KeyError(submission_id)
+        return store.request_approval(
+            task_id=submission.task_id,
+            submission_id=submission_id,
+            action_name=action_name,
+            arguments=dict(arguments),
+            workspace_root=submission.request().cwd,
+            required_scope=required_scope,
+            ttl_seconds=self.approval_ttl_seconds,
+            now=now,
+        )
+
+    def decide(
+        self,
+        control: TaskControl,
+        approval_id: str,
+        decision: str,
+        *,
+        expected_action_fingerprint: str,
+        now=None,
+    ) -> ApprovalRecord:
+        """Submit a human decision; the first committed ruling stands."""
+        task_id, actor = self._require_control(control, "approve")
+        if self.task_store is None:
+            raise RuntimeError("Approval records require a task store")
+        approval = self.task_store.get_approval(approval_id)
+        if approval is None:
+            raise KeyError(approval_id)
+        if approval.task_id != task_id:
+            raise PermissionError("Approval belongs to a different task")
+        return self.task_store.decide(
+            approval_id,
+            decision,
+            expected_action_fingerprint=expected_action_fingerprint,
+            actor=actor,
+            now=now,
+        )
+
+    def cancel(self, control: TaskControl, *, now=None) -> str:
+        """Record the authoritative cancellation acceptance point for the Task.
+
+        Recording acceptance does not mean execution has stopped; interrupting
+        started actions and reconciling their results remain execution-layer
+        responsibilities.
+        """
+        task_id, _actor = self._require_control(control, "cancel")
+        if self.task_store is None:
+            raise RuntimeError("Cancellation acceptance requires a task store")
+        return self.task_store.accept_cancellation(task_id, now=now)
+
+    def pending_approvals(self, control: TaskControl, *, now=None) -> tuple[ApprovalRecord, ...]:
+        task_id, _actor = self._require_control(control, "approve")
+        if self.task_store is None:
+            raise RuntimeError("Approval records require a task store")
+        return self.task_store.pending_approvals(task_id, now=now)
 
     def _complete_delivery(self, submission_id: str) -> None:
         if self.task_store is not None and self.task_store.get_submission(submission_id) is not None:
@@ -326,6 +438,7 @@ class Runtime:
                 raise RuntimeError("Runtime is still running")
             self._closed = True
             self._task_access.clear()
+            self._task_control.clear()
             self._condition.notify_all()
             running = self._running
         if running:

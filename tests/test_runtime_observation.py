@@ -289,7 +289,7 @@ def test_upgrade_old_records_and_reject_future_database(tmp_path):
     assert not store.claim("old")
     assert TaskStore(path).snapshot("task") == snapshot
     with sqlite3.connect(path) as connection:
-        connection.execute("PRAGMA user_version=3")
+        connection.execute("PRAGMA user_version=4")
     with pytest.raises(ValueError, match="database version"):
         TaskStore(path)
 

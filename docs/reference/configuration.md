@@ -50,6 +50,9 @@ subagent_max_model_retries = 1
 # 后台子会话单次模型请求总截止时间，默认 120 秒，内部硬上限 300 秒。
 # 该值独立于前台 SAIWORKS_MODEL_TIMEOUT，避免前台交互预算隐式截断后台任务。
 subagent_model_timeout = 120
+# 审批记录的有效期秒数；到期后迟到的决定只能得到 expired，过期判定是惰性的，
+# 没有后台扫描。默认 300，内部硬上限 86400。
+approval_ttl_seconds = 300
 
 [limits]
 # 每个 MCP 服务最多发现的工具数。默认 256，内部硬上限 1024。

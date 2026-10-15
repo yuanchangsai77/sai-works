@@ -1,6 +1,6 @@
 # 壳与内核拆分：阶段核对与实施证据
 
-历史基线日期：2026-10-01。设计基线提交：e70e525。A 核对完成，B/C 的同进程职责迁移与 R1–R3 可靠性验收完成。2026-10-10 新增 D1 同进程任务观察，证据见第 5 节；D2/D3/E/F 未实施。无网络 API、无常驻续跑或断线审批承诺。
+历史基线日期：2026-10-01。设计基线提交：e70e525。A 核对完成，B/C 的同进程职责迁移与 R1–R3 可靠性验收完成。2026-10-10 新增 D1 同进程任务观察，证据见第 5 节；2026-10-15 完成 D2 批次①（审批记录与控制资格），证据见第 6 节；D2 其余批次与 D3/E/F 未实施。无网络 API、无常驻续跑或断线审批承诺。
 
 ## 1. 规范与设计审查
 
@@ -58,3 +58,16 @@ B/C 相关套件：headless runtime、engine/session/CLI、subagent、CLI entryp
 审查修复：快照数据库读取移出调度锁，读取前后检查资格，避免慢读取拖延控制并防止撤销期间继续返回数据。成功保存会话后、交付标记失败的同进程重试仅补标记，不重复追加消息；completed 提交重复调用不再次保存或通知。该补交付凭据只存在于当前 Runtime，重启后的 pending 仍需核对。新观察接口尚未整体接入各壳，D2 具体协商项已补入提案，未提前实施审批范围或数据库变化。
 
 范围限制：各壳仍使用旧进度与同步审批入口，D3 尚未迁移；审批挂起、TTL、continuation、按 Task 取消及控制资格在 D2；轮询游标只供同进程使用，不保证跨进程接入或常驻续跑。下一步先确认 D2 动作批准范围、可恢复状态和调度契约，再实施。
+
+## 6. D2 批次①：审批记录与控制资格（2026-10-15）
+
+契约协商项已于 2026-10-15 逐项确认：批准范围收敛为单动作指纹批准（接受审批次数增加）；新增独立 TaskControl 控制句柄；`approval_ttl_seconds` 默认 300 秒；任务库 v2→v3 事务内升级并停止旧写入进程。现行接口归[任务控制与审批参考](../reference/runtime-control.md)。本批次只交付审批记录、决定有效性、事务竞争与控制资格；引擎挂起/续跑、预算连续性与旧同步审批适配属后续批次，引擎审批路径与 TaskSnapshot 结构在本批次不变，`consumed` 仅为保留枚举。
+
+- TaskStore 升级版本 3：新增 approvals 表与 task_cancellations 表；审批请求、决定、取消接受与惰性过期均在与 Task revision 相同的写事务内提交，幂等重复不递增修订。
+- 动作指纹覆盖 Task、submission、动作名、规范化参数、解析后的工作区根与所需 scope；同指纹幂等返回，异指纹同身份报错；首次提交的决定生效，冲突决定返回既有裁决。
+- Runtime 新增 `grant_task_control`/`revoke_task_control`/`decide`/`cancel`/`pending_approvals` 及所有者级 `request_approval`；权限与 actor 授予时固定并由 Runtime 持有；观察句柄与控制句柄互不通用，伪造、撤销、跨实例与关闭后的句柄均被拒绝；decide/cancel 竞争恰好落一种顺序。
+- D1 升级测试的未来版本探针从 3 调整为 4（v3 成为受支持版本，v4 仍须拒绝）。
+
+新增 15 项行为测试（tests/test_runtime_approval_control.py）：指纹绑定与修订递增、批准/拒绝生命周期与幂等冲突、过期拒绝与重请求新身份、取消幂等与迟到决定、已提交裁决免疫后续取消、decide/cancel 双线程竞争、资格矩阵与跨任务拒绝、畸形句柄、关闭后全部拒绝、v2→v3 升级与未知版本拒绝、未知审批状态拒绝、配置默认值/覆盖/越界、审批记录不影响执行摘要。
+
+验证命令：`PYTHONPATH=src ./.venv/Scripts/python.exe -m pytest tests/test_runtime_approval_control.py tests/test_runtime_observation.py tests/test_headless_runtime.py tests/test_desktop_controller.py tests/test_app_cli_entrypoint_dispatch.py tests/test_runtime_config_loading.py -q`，97 项通过（Windows）。另在 WSL 原生副本运行全量：646 项通过、6 项失败，失败集合与第 3 节记录的基线完全相同（显式上下文/工作区摘要布局 2 项、模型工作集旧断言 3 项、TUI 补全数量 1 项），已在独立工作树检出 HEAD 复现确认属既有失败，不作为本轮回归。WSL 副本经白名单进程打包后解包获得，绕开了 DLP 透明加密导致的 /mnt/d 密文读取问题。

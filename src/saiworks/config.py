@@ -22,6 +22,7 @@ MAX_MODEL_STREAM_SECONDS = 86_400.0
 MAX_SUBAGENT_MODEL_TIMEOUT_SECONDS = 300.0
 MAX_MCP_TOOLS_PER_SERVER = 1_024
 MAX_ACTIVE_CAPABILITIES = 32
+MAX_APPROVAL_TTL_SECONDS = 86_400
 MAX_TOOL_OUTPUT_BYTES = 1_048_576
 MAX_READ_FILE_BYTES = 1_048_576
 MAX_TOOL_RESULTS = 2_000
@@ -41,6 +42,7 @@ class OrchestrationConfig:
     max_run_seconds: float = 900.0
     subagent_max_model_retries: int = 1
     subagent_model_timeout: float = 120.0
+    approval_ttl_seconds: int = 300
 
 
 @dataclass(frozen=True, slots=True)
@@ -165,6 +167,13 @@ def _load_tuning(cwd: str | Path | None) -> tuple[ModelRetryConfig, Orchestratio
                 1.0,
                 MAX_SUBAGENT_MODEL_TIMEOUT_SECONDS,
                 "orchestration.subagent_model_timeout",
+            ),
+            approval_ttl_seconds=_bounded_int(
+                values.get("orchestration.approval_ttl_seconds"),
+                300,
+                1,
+                MAX_APPROVAL_TTL_SECONDS,
+                "orchestration.approval_ttl_seconds",
             ),
         ),
         RuntimeLimits(

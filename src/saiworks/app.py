@@ -268,6 +268,7 @@ def create_runtime(
         subagent_runner=subagent_runner,
         subagent_grant=subagent_grant,
         task_store=TaskStore(root / ".saiworks" / "tasks.sqlite3") if _task_store_enabled else None,
+        approval_ttl_seconds=config.orchestration.approval_ttl_seconds,
     )
 
     runtime.execution_factory = lambda: create_runtime(
