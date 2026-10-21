@@ -3,11 +3,11 @@ from __future__ import annotations
 import json
 import os
 import time
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from uuid import UUID, uuid4
-from typing import Iterator
 
 from ..types import (
     EvidenceRecord,
@@ -694,8 +694,8 @@ class SessionStore:
 
         if open_issue:
             recovery_hint = (
-                "Reuse the last successful result when possible, avoid repeating identical reads, "
-                "and resolve the blocking issue before exploring more context."
+                "Use the recorded findings and references; inspect a specific source only when its detail is missing. "
+                "Avoid restarting broad exploration and resolve the recorded blocker."
             )
         elif trace.tool_names:
             recovery_hint = "Continue from the latest completed state and only call tools needed for the next step."
@@ -728,7 +728,7 @@ class SessionStore:
         return f"{single_line[: limit - 3]}..."
 
     def _timestamp(self) -> str:
-        return datetime.now(timezone.utc).isoformat(timespec="microseconds").replace("+00:00", "Z")
+        return datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
     def _build_session_id(self, timestamp: str) -> str:
         compact = (

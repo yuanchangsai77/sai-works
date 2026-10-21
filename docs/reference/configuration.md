@@ -38,7 +38,7 @@ delays = [0.5, 1, 1.5, 2, 3, 5, 8]
 # 一次任务中模型最多可继续思考或调用工具的轮数。
 # 默认 100，内部硬上限 500。
 max_turns = 100
-# 一次 run 内允许的模型请求总次数，包含 retry。默认 120，内部硬上限 2000。
+# 一次 run 内允许的模型请求总次数，包含 retry 和上下文摘要请求。默认 120，内部硬上限 2000。
 max_model_attempts = 120
 # 连续模型超时达到该值时打开熔断器。默认 8，内部硬上限 50。
 max_consecutive_model_timeouts = 8
@@ -98,8 +98,8 @@ read_timeout = 300
 请求的 retry 不会增加 semantic turn。attempt 总数、连续超时或显式启用的 `max_run_seconds`
 达到边界时，runtime 会保存 partial checkpoint 并返回结构化 `exhausted`，不会继续放大相同失败。
 
-`prompt_context_chars` 约束最终 messages 包。系统规则、当前请求和 runtime checkpoint 优先保留；
-旧 conversation 从新到旧装入剩余预算，超限时写入省略标记。该值是字符层安全预算，不等同于模型
+`prompt_context_chars` 约束 messages 与工具 schema 的合计字符预算。系统规则、当前请求和 runtime checkpoint 优先保留；
+最新观察、最近完整对话与更早观察按工作集策略装入剩余预算，超限时写入省略标记。该值是字符层安全预算，不等同于模型
 厂商计算的 token 上限；模型 profile 会把它作为当前适配器的上下文能力投影。
 
 ## 环境变量

@@ -25,8 +25,8 @@ def tool() -> SimpleTool:
         name="patch",
         description=(
             "Apply a unified diff inside the workspace after validating paths and "
-            "observed context. Unchanged hunks that moved to one unique location "
-            "may be safely relocated and reported."
+            "matching old lines at their stated location. Previously observed "
+            "unchanged hunks may be safely relocated when their location is unique."
         ),
         arguments={"diff": "Unified diff text to apply."},
         input_schema=schema({"diff": {"type": "string"}}, required=["diff"]),
@@ -72,7 +72,7 @@ def run(action: ToolAction, context: ToolContext) -> ToolResult:
             return retarget(resolved, action.name)
         resolved_files[path] = resolved
         if resolved.path.exists():
-            read_error, file_relocations = validate_hunks_were_read(
+            read_error, file_relocations = validate_patch_hunks(
                 action.name,
                 path,
                 resolved.path,
@@ -95,6 +95,11 @@ def run(action: ToolAction, context: ToolContext) -> ToolResult:
         )
 
     root = roots.pop()
+    direct_verified = any(
+        hunk.get("direct_verified")
+        for hunks in hunks_by_file.values()
+        for hunk in hunks
+    )
     diff = relocate_diff_hunks(diff, hunks_by_file)
     diff = rebase_diff_paths(diff, resolved_files, root)
 
@@ -109,7 +114,7 @@ def run(action: ToolAction, context: ToolContext) -> ToolResult:
                 check = recount_check
                 use_recount = True
 
-        if not use_recount:
+        if not use_recount and not direct_verified:
             minimal_context_check = run_command(
                 ["git", "apply", "--check", "--recount", "--unidiff-zero", "-"],
                 root,
@@ -265,7 +270,7 @@ def parse_hunks(diff: str) -> dict[str, list[dict[str, object]]]:
     return hunks
 
 
-def validate_hunks_were_read(
+def validate_patch_hunks(
     tool_name: str,
     diff_path: str,
     path: Path,
@@ -274,46 +279,51 @@ def validate_hunks_were_read(
 ) -> tuple[ToolResult | None, list[dict[str, object]]]:
     read_files = state.get("read_files", {})
     entry = read_files.get(str(path))
-    if not entry:
-        affected_lines = hunk_affected_lines(hunks)
-        start_line = min(affected_lines) if affected_lines else 1
-        end_line = max(affected_lines) if affected_lines else start_line
-        return ToolResult(
-            name=tool_name,
-            success=False,
-            output=(
-                f"patch target has not been inspected: {diff_path}. "
-                f"Read lines {start_line}-{end_line} with read_file and retry."
-            ),
-            error_code="file_not_read",
-            metadata={
-                "path": str(path),
-                "read_hint": {
-                    "path": diff_path,
-                    "start_line": start_line,
-                    "end_line": end_line,
-                },
-            },
-        ), []
-
+    if entry and state.get("model_visible_reads_enforced"):
+        entry = {
+            **entry,
+            "observations": [
+                observed for observed in entry.get("observations", [])
+                if observed.get("model_visible") is True
+            ],
+        }
+        if not entry["observations"]:
+            entry = None
+    current_data, current_sha256, current_mtime_ns = snapshot(path)
+    current_lines = text_lines(current_data)
     missing: list[int] = []
     for hunk in hunks:
         required = hunk.get("required", [])
         if required:
             contents = [content for _line_no, content in required]
-            exact_match = all(
+            old_start = required[0][0]
+            old_index = old_start - 1
+            if old_start > 0 and current_lines[old_index : old_index + len(contents)] == contents:
+                if not entry or not all(
+                    observed_line_matches(entry, line_no, content)
+                    for line_no, content in required
+                ):
+                    hunk["direct_verified"] = True
+                continue
+            observed_at_location = entry and all(
                 observed_line_matches(entry, line_no, content)
                 for line_no, content in required
             )
-            if not exact_match and observed_sequence_start(entry, contents) is None:
+            if not observed_at_location and (
+                not entry or observed_sequence_start(entry, contents) is None
+            ):
                 missing.extend(line_no for line_no, _content in required)
             continue
 
         old_start = int(hunk.get("old_start", 0))
         anchor = max(1, old_start)
-        if not observed_line(entry, anchor) and not observed_empty_file(entry):
+        if not entry or (
+            not observed_line(entry, anchor) and not observed_empty_file(entry)
+        ):
             missing.append(anchor)
 
+    if not hunks:
+        missing.append(1)
     if missing:
         start_line = min(missing)
         end_line = max(missing)
@@ -337,13 +347,13 @@ def validate_hunks_were_read(
             },
         ), []
 
-    current_data, current_sha256, current_mtime_ns = snapshot(path)
-    current_lines = text_lines(current_data)
     stale_lines: list[int] = []
     relocations: list[dict[str, object]] = []
     for hunk in hunks:
         required = hunk.get("required", [])
         if required:
+            if hunk.get("direct_verified"):
+                continue
             old_start = required[0][0]
             contents = [content for _line_no, content in required]
             old_index = old_start - 1

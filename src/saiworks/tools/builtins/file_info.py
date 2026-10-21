@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ...types import ToolAction, ToolResult
 from ..base import SimpleTool, ToolContext
+from ..observation_adapters import query_observation
 from ..shared import path_error, resolve_workspace_path, retarget, schema
 from ..summary import file_info_summary
 
@@ -15,6 +16,7 @@ def tool() -> SimpleTool:
         evidence_kinds=["read"],
         handler=run,
         summarizer=file_info_summary,
+        observation_adapter=query_observation(),
     )
 
 

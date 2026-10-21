@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ...types import ToolAction, ToolResult
 from ..base import SimpleTool, ToolContext
+from ..observation_adapters import revision_observation
 from ..shared import run_command, schema
 from ..summary import git_show_summary
 from .git_common import ensure_git_repository, git_failure
@@ -18,6 +19,7 @@ def tool() -> SimpleTool:
         evidence_kinds=["read"],
         handler=run,
         summarizer=git_show_summary,
+        observation_adapter=revision_observation,
     )
 
 
@@ -28,10 +30,11 @@ def run(action: ToolAction, context: ToolContext) -> ToolResult:
         return repository_error
 
     revision = str(action.arguments["revision"])
-    result = run_command(["git", "show", "--stat", "--patch", revision], cwd, shell=False)
+    result = run_command(["git", "show", "--stat", "--patch", revision], cwd, shell=False, max_output_bytes=None)
     if not result.success:
         return git_failure(action.name, result, "revision_not_found", "git show failed")
 
+    resolved = run_command(["git", "rev-parse", "--verify", revision], cwd, shell=False, max_output_bytes=None)
     output = result.metadata.get("stdout", "")
     return ToolResult(
         name=action.name,
@@ -40,6 +43,8 @@ def run(action: ToolAction, context: ToolContext) -> ToolResult:
         metadata={
             "exit_code": result.metadata.get("exit_code"),
             "revision": revision,
+            "resolved_revision": str(resolved.metadata.get("stdout", "")).strip() if resolved.success else "",
+            "truncated": result.metadata.get("truncated", False),
             "stdout": output,
             "stderr": result.metadata.get("stderr", ""),
         },

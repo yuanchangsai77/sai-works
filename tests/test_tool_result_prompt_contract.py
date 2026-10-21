@@ -3,6 +3,7 @@ from saiworks.observability.logger import InMemoryLogger
 from saiworks.orchestration.session import SessionContext
 from saiworks.tools.base import SimpleTool, ToolContext
 from saiworks.tools.registry import ToolRegistry
+from saiworks.tools.result_packager import ToolResultPackager
 from saiworks.types import ToolAction, ToolResult, UserRequest
 
 
@@ -69,3 +70,12 @@ def test_registry_packages_every_tool_result_before_history():
     assert result.metadata["output_original_bytes"] == 200
     assert result.metadata["output_visible_bytes"] <= 24
     assert len(result.metadata["output_sha256"]) == 64
+
+
+def test_global_output_budget_updates_the_visible_file_range():
+    result = ToolResult("read_file", True, "line\n" * 100,
+                        metadata={"start_line": 10, "end_line": 109, "total_lines": 200})
+    ToolResultPackager(100).package(result)
+    assert result.metadata["truncated"] is True
+    assert 10 <= result.metadata["end_line"] < 109
+    assert result.metadata["total_lines"] == 200

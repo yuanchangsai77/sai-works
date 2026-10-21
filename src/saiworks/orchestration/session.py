@@ -1,20 +1,23 @@
 from __future__ import annotations
 
-import hashlib
 import json
-from dataclasses import dataclass, field
-
+import threading
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING
 
+from ..observations import Observation, observation_for
 from ..types import (
     EvidenceRecord,
     RuntimeBlocker,
     TaskCheckpoint,
+    ToolAction,
     ToolDefinition,
     ToolResult,
     UserRequest,
     WorkspaceSessionState,
 )
+from .history import bounded_arguments
 
 if TYPE_CHECKING:
     from ..capabilities.model import InstructionContent
@@ -27,6 +30,11 @@ class SessionContext:
     workspace_state: WorkspaceSessionState = field(default_factory=WorkspaceSessionState)
     available_tools: list[ToolDefinition] = field(default_factory=list)
     history: list[str] = field(default_factory=list)
+    model_history: list[list[dict[str, object]]] = field(default_factory=list)
+    observations: list[Observation] = field(default_factory=list)
+    recovered_observations: list[Observation] = field(default_factory=list)
+    visible_observations: frozenset[str] | None = None
+    visible_observation_views: list[dict[str, object]] | None = None
     tool_results: list[ToolResult] = field(default_factory=list)
     active_instructions: list[InstructionContent] = field(default_factory=list)
     project_rules: list[ProjectRule] = field(default_factory=list)
@@ -34,10 +42,21 @@ class SessionContext:
     explicit_context: list[ExplicitContextItem] = field(default_factory=list)
     external_tool_statuses: list[dict[str, object]] = field(default_factory=list)
     checkpoint: TaskCheckpoint = field(default_factory=TaskCheckpoint)
+    cancellation: threading.Event | None = None
+    before_model_request: Callable[[], None] | None = None
 
 
-    def add_model_message(self, message: str) -> None:
+    def add_model_message(self, message: str, actions: list[ToolAction] | None = None) -> None:
         self.history.append(f"model: {message}")
+        projected: dict[str, object] = {"role": "assistant", "content": message}
+        if actions:
+            projected["tool_calls"] = [
+                {"id": f"call_saiworks_{len(self.model_history)}_{index}", "type": "function",
+                 "function": {"name": action.name, "arguments": json.dumps(
+                     bounded_arguments(action.arguments), ensure_ascii=False, sort_keys=True)}}
+                for index, action in enumerate(actions)
+            ]
+        self.model_history.append([projected])
 
     def add_tool_result(self, result: ToolResult) -> None:
         self.tool_results.append(result)
@@ -51,6 +70,7 @@ class SessionContext:
         if isinstance(action_artifact_ref, str) and action_artifact_ref:
             argument_text += f" args_ref={action_artifact_ref}"
         self.history.append(f"tool:{result.name}:{status}{argument_text}: {result.output}")
+        self._add_observation(result)
         artifact_refs = self._record_artifacts(result)
         self._record_evidence(result, artifact_refs)
         if result.success:
@@ -139,14 +159,41 @@ class SessionContext:
         self.checkpoint.evidence = self.checkpoint.evidence[-100:]
 
     def _bounded_arguments(self, value: object) -> object:
-        if isinstance(value, dict):
-            return {str(key): self._bounded_arguments(item) for key, item in value.items()}
-        if isinstance(value, list):
-            return [self._bounded_arguments(item) for item in value[:50]]
-        if isinstance(value, str) and len(value) > 500:
-            digest = hashlib.sha256(value.encode("utf-8")).hexdigest()[:16]
-            return f"<omitted {len(value)} chars; sha256:{digest}>"
-        return value
+        return bounded_arguments(value)
+
+    def _add_observation(self, result: ToolResult) -> None:
+        record = observation_for(result)
+        if record is None or record.success != result.success or record.error_code != result.error_code:
+            action = ToolAction(result.name, result.metadata.get("action_arguments", {}))
+            record = Observation.create(action, result, self.workspace_state.active_root or self.request.cwd)
+            if result.error_code in {"progress_required", "model_output_invalid"}:
+                record = replace(record, control=True)
+            result.metadata["_observation"] = record.payload()
+        self.observations.append(record)
+        complete = bool(result.metadata.get("_observation_body_complete", record.complete))
+        group = self.model_history[-1] if self.model_history else []
+        calls = group[0].get("tool_calls", []) if group else []
+        completed = {message.get("tool_call_id") for message in group[1:]}
+        pending = next((call for call in calls if call["id"] not in completed), None)
+        visible_coverage = None
+        if not complete and record.coverage is not None and result.name == "read_file":
+            start, end = result.metadata.get("start_line"), result.metadata.get("end_line")
+            if type(start) is int and type(end) is int:
+                visible_coverage = (start, end)
+        if pending is not None and pending["function"]["name"] == result.name:
+            if result.error_code == "blocked_by_security_policy":
+                pending["function"]["arguments"] = "{}"
+            projected = record.message(result.output, role="tool", complete=complete,
+                                       coverage=visible_coverage, tool_call_id=pending["id"])
+            if visible_coverage is not None:
+                projected["_visible_coverage"] = visible_coverage
+            group.append(projected)
+        else:
+            # Synthetic runtime feedback has no model-issued call to impersonate.
+            projected = record.message(result.output, complete=complete, coverage=visible_coverage)
+            if visible_coverage is not None:
+                projected["_visible_coverage"] = visible_coverage
+            self.model_history.append([projected])
 
     def _bounded_text(self, value: str, limit: int = 1_000) -> str:
         if len(value) <= limit:

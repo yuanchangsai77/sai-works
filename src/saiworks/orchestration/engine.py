@@ -3,13 +3,14 @@ from __future__ import annotations
 import json
 import threading
 import time
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Iterable
 from uuid import uuid4
 
 from ..intent import RequestIntentClassifier
 from ..model.types import ModelProtocolError, ModelRetryableError
+from ..observations import observation_for
 from ..types import (
     EvidenceRecord,
     ExecutionSummary,
@@ -20,6 +21,7 @@ from ..types import (
     UserRequest,
     WorkspaceSessionState,
 )
+from .control import CompletionPolicy, RunBudgetPolicy
 from .ext import ContextLoader
 from .failures import runtime_failure_message, runtime_failure_retryability
 from .permissions import PermissionContext
@@ -31,7 +33,6 @@ from .progress import (
     ProgressSignal,
 )
 from .session import SessionContext
-from .control import CompletionPolicy, RunBudgetPolicy
 
 
 @dataclass(slots=True)
@@ -214,7 +215,7 @@ class ExecutionEngine:
         self._keep_tool_state = session_key is not None
         permissions = PermissionContext()
         available_tools = self._available_tool_definitions(request)
-        provider_statuses = getattr(self.tools, "provider_statuses", lambda: [])()
+        provider_statuses = getattr(self.tools, "provider_statuses", list)()
         checkpoint = self._initial_checkpoint(request)
         workspace_state = self._workspace_state(request)
         session_request = UserRequest(
@@ -230,6 +231,14 @@ class ExecutionEngine:
             checkpoint=checkpoint,
         )
         self.current_session = session
+        archive = getattr(self.tools, "observation_archive", None)
+        if archive is not None:
+            traces = request.metadata.get("session_trace", [])
+            run_ids = [item.get("run_id", "") if isinstance(item, dict) else getattr(item, "run_id", "")
+                       for item in traces] if isinstance(traces, list) else []
+            session.recovered_observations = archive.recover(
+                run_ids, str(request.metadata.get("session_id") or ""), self._workspace_roots(workspace_state),
+            )
         for root in self._workspace_roots(workspace_state):
             permissions.grant_workspace_path(root, scope="session")
 
@@ -254,6 +263,17 @@ class ExecutionEngine:
         run_started = time.monotonic()
         model_attempts = 0
         consecutive_model_timeouts = 0
+        session.cancellation = self._execution_context.cancellation
+
+        def before_model_request() -> None:
+            nonlocal model_attempts
+            self._raise_if_cancelled()
+            if model_attempts >= self.max_model_attempts:
+                raise _ModelAttemptBudgetReached
+            model_attempts += 1
+            session.checkpoint.runtime_state["model_attempts"] = str(model_attempts)
+
+        session.before_model_request = before_model_request
 
         for turn in range(1, self.max_turns + 1):
             self._raise_if_cancelled()
@@ -317,11 +337,16 @@ class ExecutionEngine:
                         )
                         if budget_problem is not None:
                             break
-                        model_attempts += 1
-                        session.checkpoint.runtime_state["model_attempts"] = str(model_attempts)
+                        if not getattr(self.model, "tracks_model_requests", False):
+                            before_model_request()
                         reply = self.model.respond(session)
                         consecutive_model_timeouts = 0
                         self._raise_if_cancelled()
+                        break
+                    except _ModelAttemptBudgetReached:
+                        budget_problem = self._run_budget_problem(
+                            run_started, model_attempts, consecutive_model_timeouts,
+                        )
                         break
                     except (ModelRetryableError, TimeoutError) as error:
                         if self._is_timeout_error(error):
@@ -384,7 +409,24 @@ class ExecutionEngine:
                     self.progress_reporter.model_finished(progress_handle)
             if budget_problem is not None:
                 return self._finish(self._budget_summary(session, budget_problem))
-            session.add_model_message(reply.message)
+            sync_visible = getattr(self.tools, "set_visible_observations", None)
+            if callable(sync_visible):
+                views = session.visible_observation_views
+                if views is None:
+                    views = []
+                    for result in session.tool_results:
+                        record = observation_for(result)
+                        if record is None:
+                            continue
+                        complete = bool(result.metadata.get("_observation_body_complete", record.complete))
+                        coverage = record.coverage
+                        if not complete and record.tool == "read_file":
+                            start, end = result.metadata.get("start_line"), result.metadata.get("end_line")
+                            coverage = (start, end) if type(start) is int and type(end) is int else None
+                        views.append({"observation_id": record.identifier,
+                                      "complete": complete, "coverage": coverage})
+                sync_visible(views)
+            session.add_model_message(reply.message, reply.actions)
             self.logger.record(
                 "model.reply",
                 {
@@ -421,6 +463,15 @@ class ExecutionEngine:
                     turn_results.append(result)
                     continue
                 action_key = self._action_key(action)
+                cache_check = getattr(self.tools, "cached_result_valid", None)
+                if action_key in completed_actions:
+                    previous = completed_actions[action_key]
+                    record = observation_for(previous)
+                    invisible = previous.success and previous.metadata.get("execution_risk") == "read" and session.visible_observations is not None and (
+                        record is None or record.identifier not in session.visible_observations)
+                    if invisible or (callable(cache_check) and not cache_check(previous=previous, action=action, cwd=action_cwd)):
+                        completed_actions.pop(action_key, None)
+                        duplicate_counts.pop(action_key, None)
                 if action_key in completed_actions:
                     duplicate_counts[action_key] = duplicate_counts.get(action_key, 0) + 1
                     result = self._duplicate_result(action, completed_actions[action_key], duplicate_counts[action_key])
@@ -486,7 +537,8 @@ class ExecutionEngine:
                             if result.success and self._may_mutate_workspace(decision.risk_level):
                                 completed_actions.clear()
                                 duplicate_counts.clear()
-                                progress_recovery_sent = False
+                                if "workspace_change" in result.metadata.get("evidence", []):
+                                    progress_recovery_sent = False
                             completed_actions[action_key] = result
                         continue
 
@@ -535,7 +587,8 @@ class ExecutionEngine:
                     if result.success and self._may_mutate_workspace(decision.risk_level):
                         completed_actions.clear()
                         duplicate_counts.clear()
-                        progress_recovery_sent = False
+                        if "workspace_change" in result.metadata.get("evidence", []):
+                            progress_recovery_sent = False
                     completed_actions[action_key] = result
 
             recovery_required = any(
@@ -611,14 +664,28 @@ class ExecutionEngine:
             elif turn_results:
                 consecutive_failed_test_turns = 0
 
+            previous_results = session.tool_results[:-len(turn_results)] if turn_results else session.tool_results
+            last_change = next((index for index in range(len(previous_results) - 1, -1, -1)
+                                if "workspace_change" in previous_results[index].metadata.get("evidence", [])), -1)
+            previous_results = previous_results[last_change + 1:]
+            if DefaultProgressPolicy.has_new_observation(turn_results, previous_results):
+                progress_recovery_sent = False
             progress_signal = self.progress_policy.evaluate(
                 ProgressContext(
                     intent=request_intent,
                     results=turn_results,
                     recovery_sent=progress_recovery_sent,
+                    previous_results=previous_results,
+                    visible_observations=session.visible_observations,
                 )
             )
             if progress_signal is not None:
+                if progress_recovery_sent:
+                    return self._finish(ExecutionSummary(
+                        final_message="Repeated inspection produced no new information after recovery. Resume from the recorded observations and findings.",
+                        tool_results=session.tool_results, outcome="stalled",
+                        active_instructions=session.active_instructions,
+                    ))
                 progress_result = self._progress_recovery_result(progress_signal)
                 self._record_synthetic_tool_result(progress_result)
                 session.add_tool_result(progress_result)
@@ -1351,7 +1418,10 @@ class ExecutionEngine:
             result.metadata.setdefault("action_artifact_ref", action_ref["artifact_ref"])
 
     def _duplicate_result(self, action, previous: ToolResult, count: int) -> ToolResult:
-        blocked = not previous.success or count > self.max_duplicate_skips
+        # Read cache reuse is not a repeated side effect. The whole-turn
+        # observation policy owns read stagnation, including mixed tool turns.
+        read_reuse = previous.success and previous.metadata.get("execution_risk") == "read"
+        blocked = not previous.success or (not read_reuse and count > self.max_duplicate_skips)
         return ToolResult(
             name=action.name,
             success=not blocked,
@@ -1361,6 +1431,10 @@ class ExecutionEngine:
             ),
             error_code="duplicate_tool_call" if blocked else None,
             metadata={
+                **{key: previous.metadata[key] for key in (
+                    "execution_workspace", "execution_risk", "path", "start_line", "end_line",
+                    "_observation", "_observation_body_complete",
+                ) if key in previous.metadata},
                 "duplicate": True,
                 "duplicate_count": count,
                 "duplicate_limit": self.max_duplicate_skips,
@@ -1375,9 +1449,9 @@ class ExecutionEngine:
             name="progress_guard",
             success=False,
             output=(
-                "The last read-only tool call repeated context that is already available. "
-                "Use the previous result in session history. If the user requested file changes, "
-                "stop inspecting and make the next action a patch or a final answer explaining why no change is needed."
+                "Repeated inspection is producing no new information. Use the available observations "
+                "to deliver the requested analysis or authorized changes. Inspect again only to fill "
+                "a specific missing fact. This feedback does not authorize file changes."
             ),
             error_code="progress_required",
             metadata={"repeated_actions": signal.repeated_actions},

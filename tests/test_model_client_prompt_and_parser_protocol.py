@@ -6,11 +6,17 @@ import urllib.request
 import pytest
 
 from saiworks.app import create_model_client
+from saiworks.context.packager import (
+    ContextBudgetExceededError,
+    ContextPackager,
+    ContextSegment,
+)
+from saiworks.context.explicit import ExplicitContextItem
 from saiworks.model.client import OpenAICompatibleModelClient, StubModelClient
 from saiworks.model.parser import ModelReplyParser
 from saiworks.model.prompt import ModelPromptBuilder
-from saiworks.context.packager import ContextPackager, ContextSegment
 from saiworks.model.types import (
+    ModelCapabilityProfile,
     ModelClientConfig,
     ModelConnectionError,
     ModelServiceError,
@@ -18,7 +24,13 @@ from saiworks.model.types import (
 )
 from saiworks.observability.logger import InMemoryLogger
 from saiworks.orchestration.session import SessionContext
-from saiworks.types import SessionResumeState, SessionRunTrace, SessionTurnTrace, ToolDefinition, UserRequest
+from saiworks.types import (
+    SessionResumeState,
+    SessionRunTrace,
+    SessionTurnTrace,
+    ToolDefinition,
+    UserRequest,
+)
 
 
 def test_post_json_wraps_timeout_as_runtime_error(monkeypatch):
@@ -558,23 +570,23 @@ def test_build_messages_keeps_tool_definitions_in_stable_system_prefix():
     assert "general-purpose agent runtime" in system
     assert "not your identity" in system
     assert "saiworks is the orchestration" not in system
-    assert "- patch: Apply a unified diff." in system
-    assert "- read_file: Read a workspace file." in system
-    assert "argument path: File path." in system
+    assert "supplied API tool schemas" in system
+    tools = builder.build_tools(session.available_tools)
+    assert {tool["function"]["name"] for tool in tools} == {"patch", "read_file"}
     assert first_history == {"role": "user", "content": "previous turn"}
     assert second_history == {"role": "assistant", "content": "previous answer"}
     assert "User request: inspect tools" in user
-    assert "Recent current-run history:" in user
+    assert any("tool:read_file:ok: content" in str(item["content"]) for item in messages[4:])
     assert "Available tools:" not in user
     assert "- read_file: Read a workspace file." not in user
 
 
 def test_context_packager_preserves_current_request_and_latest_conversation_within_budget():
     packager = ContextPackager(max_chars=4_000)
-    conversation = [
-        {"role": "user", "content": f"old-{index}-" + ("x" * 700)}
-        for index in range(8)
-    ]
+    conversation = [message for index in range(8) for message in (
+        {"role": "user", "content": f"old-{index}-" + ("x" * 700)},
+        {"role": "assistant", "content": f"answer-{index}"},
+    )]
 
     messages = packager.package(
         "system rules\n" + ("s" * 1_000),
@@ -609,22 +621,18 @@ def test_context_packager_prioritizes_required_atomic_sections_over_large_option
     assert sum(len(str(item["content"])) for item in messages) <= 4_000
 
 
-def test_context_packager_reserves_space_for_each_required_segment_when_they_overflow():
+def test_context_packager_rejects_overflow_instead_of_truncating_required_request():
     packager = ContextPackager(max_chars=4_000)
 
-    messages = packager.package_segments(
-        [ContextSegment("PROTOCOL\n" + ("p\n" * 2_000), "protocol", required=True)],
-        [],
-        [
-            ContextSegment("REQUEST\n" + ("r\n" * 2_000), "request", required=True),
-            ContextSegment("CHECKPOINT\n" + ("c\n" * 2_000), "checkpoint", required=True),
-        ],
-    )
-
-    assert "PROTOCOL" in str(messages[0]["content"])
-    assert "REQUEST" in str(messages[-1]["content"])
-    assert "CHECKPOINT" in str(messages[-1]["content"])
-    assert sum(len(str(item["content"])) for item in messages) <= 4_000
+    with pytest.raises(ContextBudgetExceededError):
+        packager.package_segments(
+            [ContextSegment("PROTOCOL\n" + ("p\n" * 2_000), "protocol", required=True)],
+            [],
+            [
+                ContextSegment("REQUEST\n" + ("r\n" * 2_000), "request", required=True),
+                ContextSegment("CHECKPOINT\n" + ("c\n" * 2_000), "checkpoint", required=True),
+            ],
+        )
 
 
 def test_model_client_projects_capability_profile_and_context_stats(monkeypatch):
@@ -650,6 +658,57 @@ def test_model_client_projects_capability_profile_and_context_stats(monkeypatch)
     assert profile["structured_output_mode"] == "prompt_json"
     assert profile["context_budget_chars"] == 4_000
     assert request_event.payload["context_package"]["budget_chars"] == 4_000
+    assert "truncated_current" in request_event.payload["context_package"]
+    assert "omitted_observations" in request_event.payload["context_package"]
+    assert "reserved_chars" in request_event.payload["context_package"]
+
+
+def test_model_client_compresses_large_current_context_before_main_request(monkeypatch):
+    logger = InMemoryLogger()
+    client = OpenAICompatibleModelClient(
+        base_url="http://127.0.0.1:3000", logger=logger, context_budget_chars=12_000,
+    )
+    payloads = []
+
+    def respond(_url, payload, **_kwargs):
+        payloads.append(payload)
+        if "Summarize optional runtime context" in payload["messages"][0]["content"]:
+            return {"choices": [{"message": {"content": "Relevant source fact: KEEP_THIS_FACT"}}]}
+        return {"choices": [{"message": {"content": '{"message":"done","done":true,"actions":[]}'}}]}
+
+    monkeypatch.setattr(client, "_post_json", respond)
+    session = SessionContext(UserRequest("review", "/repo"))
+    session.explicit_context = [ExplicitContextItem("big.txt", "big.txt", "file", "A" * 20_000)]
+
+    client.respond(session)
+
+    assert len(payloads) > 1
+    assert "KEEP_THIS_FACT" in str(payloads[-1]["messages"])
+    assert any(event.name == "context.compressed" for event in logger.events)
+
+
+def test_context_compression_stops_before_next_request_after_cancellation(monkeypatch):
+    import threading
+
+    logger = InMemoryLogger()
+    client = OpenAICompatibleModelClient(
+        base_url="http://127.0.0.1:3000", logger=logger, context_budget_chars=12_000,
+    )
+    session = SessionContext(UserRequest("review", "/repo"))
+    session.explicit_context = [ExplicitContextItem("big.txt", "big.txt", "file", "A" * 100_000)]
+    session.cancellation = threading.Event()
+    requests = []
+
+    def respond(_url, payload, **_kwargs):
+        requests.append(payload)
+        session.cancellation.set()
+        return {"choices": [{"message": {"content": "summary"}}]}
+
+    monkeypatch.setattr(client, "_post_json", respond)
+    with pytest.raises(KeyboardInterrupt):
+        client.respond(session)
+    assert len(requests) == 1
+    assert sum(event.name == "context.compression_request_complete" for event in logger.events) == 1
 
 
 def test_prompt_declares_one_executable_action_protocol():
@@ -869,10 +928,34 @@ def test_respond_sends_native_tool_schemas_and_parses_tool_calls(monkeypatch):
             },
         }
     ]
+
+
     assert reply.done is False
     assert reply.message == "Reading the file."
     assert reply.actions[0].name == "read_file"
     assert reply.actions[0].arguments == {"path": "README.md"}
+
+
+def test_content_protocol_does_not_advertise_native_tools_or_trust_stale_protocol_metadata(monkeypatch):
+    client = OpenAICompatibleModelClient(
+        base_url="http://127.0.0.1:3000",
+        capability_profile=ModelCapabilityProfile(model="test", action_protocol="prompt_json"),
+    )
+    session = SessionContext(
+        request=UserRequest("review", "/repo", metadata={"model_capability_profile": {"action_protocol": "native_tools"}}),
+        available_tools=[ToolDefinition(name="read_file", description="Read source.")],
+    )
+    captured = {}
+
+    def respond(_url, payload, **_kwargs):
+        captured.update(payload)
+        return {"choices": [{"message": {"content": '{"message":"done","done":true,"actions":[]}'}}]}
+
+    monkeypatch.setattr(client, "_post_json", respond)
+    assert client.respond(session).done is True
+    assert "tools" not in captured
+    assert "Executable action protocol: prompt_json" in captured["messages"][0]["content"]
+    assert client.prompt_builder.context_packager.last_stats.reserved_chars == 0
 
 
 def test_parse_response_rejects_unknown_native_tool_call():

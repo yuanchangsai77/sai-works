@@ -1,11 +1,19 @@
 from __future__ import annotations
 
-from ...types import ToolAction, ToolResult
 from ...safety.redaction import is_sensitive_path
+from ...types import ToolAction, ToolResult
 from ..base import SimpleTool, ToolContext
-from ..shared import looks_binary, path_error, positive_int, resolve_workspace_path, retarget, schema
-from ..summary import read_file_summary
+from ..observation_adapters import file_observation, file_observation_valid
 from ..observation_state import record_observation, snapshot
+from ..shared import (
+    looks_binary,
+    path_error,
+    positive_int,
+    resolve_workspace_path,
+    retarget,
+    schema,
+)
+from ..summary import read_file_summary
 
 MAX_READ_BYTES = 1_048_576
 DEFAULT_READ_BYTES = 64_000
@@ -34,6 +42,8 @@ def tool(default_max_bytes: int = DEFAULT_READ_BYTES) -> SimpleTool:
         evidence_kinds=["read"],
         handler=lambda action, context: run(action, context, default_max_bytes),
         summarizer=read_file_summary,
+        observation_adapter=file_observation,
+        observation_valid=file_observation_valid,
     )
 
 

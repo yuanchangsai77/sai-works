@@ -131,5 +131,5 @@ def test_explicit_context_prompt_section_and_logging(tmp_path):
     assert "### Explicit User Context:" in system
     assert "[file: README.md]" in system
     assert "hello" in system
-    assert system.index("### Explicit User Context:") < system.index("Available tools:")
+    assert system.index("Available tools:") < system.index("### Explicit User Context:")
     assert logger.events[-1].name == "context.explicit"

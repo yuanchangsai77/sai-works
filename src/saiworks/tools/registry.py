@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from pathlib import Path
+
+from ..observations import Observation, ObservationArchive, observation_for
 from ..types import ToolAction, ToolDefinition, ToolResult
 from .base import ToolContext
-from .result_packager import ToolResultPackager
+from .result_packager import TRUNCATION_MARKER, ToolResultPackager
 from .schema_validation import validate_schema
 
 
@@ -22,6 +25,7 @@ class ToolRegistry:
         self._max_output_bytes = max(1, int(max_output_bytes))
         self._result_packager = ToolResultPackager(self._max_output_bytes)
         self._interceptors = list(interceptors or [])
+        self.observation_archive = ObservationArchive(logger)
 
     def register_interceptor(self, interceptor) -> None:
         self._interceptors.append(interceptor)
@@ -126,11 +130,27 @@ class ToolRegistry:
         action_event = self._logger.record(
             "tool.execute", {"name": action.name, "arguments": action.arguments}
         )
+        observed_before = {
+            path: len(entry.get("observations", []))
+            for path, entry in self._state.get("read_files", {}).items()
+        }
         result = tool.run(action, context)
+        adapter = getattr(tool, "observation_adapter", None)
+        spec = adapter(action, result, context) if callable(adapter) and result.success else None
+        raw_output = result.output
+        observation = Observation.create(action, result, str(Path(cwd).resolve()),
+                                         str(self._state.get("active_session_id") or ""), spec)
+        observation = self.observation_archive.save(observation, raw_output, action.arguments)
         result = self._result_packager.package(result)
+        self._bind_visible_read_state(observed_before, observation.identifier, result, raw_output)
+        result.metadata["_observation"] = observation.payload()
+        result.metadata["_observation_body_complete"] = observation.complete and raw_output == result.output
         result.metadata.setdefault("action_arguments", dict(action.arguments))
         self._attach_action_artifact_ref(result, action_event)
         definition = tool.definition()
+        # Runtime provenance is independent of a persistent shell's cwd.
+        result.metadata["execution_workspace"] = str(Path(cwd).resolve())
+        result.metadata["execution_risk"] = definition.risk_level
         if result.success:
             declared = definition.evidence_kinds
             existing = result.metadata.get("evidence", [])
@@ -143,6 +163,75 @@ class ToolRegistry:
         result_event = self._record_result(result)
         self._attach_action_artifact_ref(result, result_event)
         return result
+
+    def _bind_visible_read_state(
+        self, before: dict[str, int], observation_id: str, result: ToolResult, raw_output: str,
+    ) -> None:
+        visible_lines: set[str] = set()
+        if result.name == "search_text":
+            output = result.output
+            if output != raw_output:
+                prefix = output.removesuffix(TRUNCATION_MARKER)
+                visible_lines = {line.rstrip("\r\n") for line in prefix.splitlines(keepends=True)
+                                 if line.endswith(("\n", "\r"))}
+            else:
+                visible_lines = set(output.splitlines())
+        for path, entry in self._state.get("read_files", {}).items():
+            for observed in entry.get("observations", [])[before.get(path, 0):]:
+                observed["observation_id"] = observation_id
+                if result.name == "read_file":
+                    start = result.metadata.get("start_line", 1)
+                    end = result.metadata.get("end_line", 0)
+                    observed["lines"] = {line: content for line, content in observed["lines"].items()
+                                         if start <= line <= end}
+                elif result.name == "search_text":
+                    observed["lines"] = {line: content for line, content in observed["lines"].items()
+                                         if f"{path}:{line}:{content}" in visible_lines}
+
+    def set_visible_observations(self, views: list[dict[str, object]]) -> None:
+        """Keep patch authorization limited to lines present in the last model request."""
+        by_id: dict[str, list[dict[str, object]]] = {}
+        for view in views:
+            identifier = view.get("observation_id")
+            if isinstance(identifier, str):
+                by_id.setdefault(identifier, []).append(view)
+        # Mark individual read occurrences, since repeated identical reads share an ID.
+        self._state["model_visible_reads_enforced"] = True
+        for entry in self._state.get("read_files", {}).values():
+            kept = []
+            for observed in entry.get("observations", []):
+                candidates = by_id.get(observed.get("observation_id"), [])
+                if not candidates:
+                    continue
+                if any(view.get("complete") for view in candidates):
+                    observed["model_visible"] = True
+                    kept.append(observed)
+                    continue
+                ranges = [view.get("coverage") for view in candidates]
+                ranges = [value for value in ranges if isinstance(value, (tuple, list))
+                          and len(value) == 2 and all(type(part) is int for part in value)]
+                visible = {line: content for line, content in observed.get("lines", {}).items()
+                           if any(start <= line <= end for start, end in ranges)}
+                if visible:
+                    observed["lines"] = visible
+                    observed["empty"] = False
+                    observed["model_visible"] = True
+                    kept.append(observed)
+            entry["observations"] = kept
+
+    def cached_result_valid(self, action: ToolAction, previous: ToolResult, *, cwd: str) -> bool:
+        if not previous.success:
+            return True  # Failure/permission retry rules remain engine-owned.
+        record = observation_for(previous)
+        tool = self._tools.get(action.name)
+        # Operation deduplication protects side effects independently of observation novelty.
+        if getattr(tool, "risk_level", "read") != "read":
+            return True
+        if not previous.metadata.get("_observation_body_complete", False):
+            return False
+        checker = getattr(tool, "observation_valid", None)
+        return bool(record and record.workspace == str(Path(cwd).resolve()) and callable(checker)
+                    and checker(record, action, self._context(cwd, None)))
 
     def preflight(
         self,

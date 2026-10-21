@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from ..intent import RequestIntent
+from ..observations import observation_for
 from ..types import ToolAction, ToolResult
 
 
@@ -53,6 +54,8 @@ class ProgressContext:
     intent: RequestIntent
     results: list[ToolResult]
     recovery_sent: bool
+    previous_results: list[ToolResult] = field(default_factory=list)
+    visible_observations: frozenset[str] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -66,27 +69,36 @@ class ProgressPolicy(Protocol):
 
 
 class DefaultProgressPolicy:
-    read_context_tools = {
-        "file_info",
-        "find_files",
-        "git_diff",
-        "git_show",
-        "git_status",
-        "list_dir",
-        "read_file",
-        "search_text",
-    }
-
     def evaluate(self, context: ProgressContext) -> ProgressSignal | None:
-        if context.recovery_sent or not context.intent.file_changes:
+        if self.has_new_observation(context.results, context.previous_results):
             return None
-        repeated = [
-            result.metadata.get("action_arguments", {"tool": result.name})
-            for result in context.results
-            if result.name in self.read_context_tools
-            and result.metadata.get("duplicate") is True
-            and int(result.metadata.get("duplicate_count", 0)) >= 1
-        ]
-        if not repeated:
+        records = [observation_for(result) for result in context.results if result.success]
+        records = [record for record in records if record is None or not record.control]
+        if not records or any(record is None or not record.certain or not record.complete for record in records):
             return None
-        return ProgressSignal(repeated_actions=repeated)
+        previous = [observation_for(result) for result in context.previous_results if result.success
+                    and result.metadata.get("_observation_body_complete", True)]
+        previous = [record.evidence_key for record in previous if record is not None
+                    and record.certain and record.complete and not record.control
+                    and (context.visible_observations is None or record.identifier in context.visible_observations)]
+        threshold = 1 if context.intent.file_changes and not context.recovery_sent else 2
+        if all(previous.count(record.evidence_key) >= threshold for record in records):
+            return ProgressSignal(repeated_actions=[result.metadata.get("action_arguments", {}) for result in context.results])
+        return None
+
+    @classmethod
+    def has_new_observation(cls, results: list[ToolResult], previous_results: list[ToolResult]) -> bool:
+        previous = [observation_for(result) for result in previous_results if result.success]
+        known = {record.evidence_key for record in previous if record is not None and record.certain}
+        bodies = {(record.tool, record.workspace, record.body_hash) for record in previous if record is not None}
+        for result in results:
+            record = observation_for(result)
+            if not result.success or result.metadata.get("duplicate") or record is None or record.control:
+                continue
+            if "workspace_change" in result.metadata.get("evidence", []):
+                return True
+            if record.certain and record.evidence_key not in known:
+                return True
+            if not record.certain and (record.tool, record.workspace, record.body_hash) not in bodies:
+                return True
+        return False

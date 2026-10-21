@@ -56,6 +56,24 @@ def test_logger_counts_model_retries_as_one_semantic_turn(tmp_path):
     assert logger.last_run_summary.turn_count == 1
 
 
+def test_resume_trace_keeps_source_and_existing_result_reference(tmp_path):
+    logger = InMemoryLogger(base_dir=str(tmp_path / "runs"))
+    request = UserRequest(prompt="review design", cwd=str(tmp_path))
+    logger.start_run(request)
+    logger.record("model.request", {"messages": []})
+    logger.record("model.reply", {"turn": 1, "message": "read design", "actions": ["read_file"]})
+    result_event = logger.record("tool.result", {
+        "name": "read_file", "success": True, "output": "design finding\n" * 1_000,
+        "metadata": {"action_arguments": {"path": "design.md"}},
+    })
+    reference = result_event.payload["result_ref"]["artifact_ref"]
+    logger.finalize(request, ExecutionSummary(final_message="interrupted", tool_results=[]))
+    detail = logger.last_run_summary.turns[0].tool_result_details[0]
+    assert "design.md" in detail and "design finding" in detail
+    assert f"result_ref={reference}" in detail
+    assert __import__("pathlib").Path(reference).exists()
+
+
 def test_logger_compacts_runtime_model_reply_without_archiving_body(tmp_path):
     logger = InMemoryLogger(base_dir=str(tmp_path / "runs"))
     logger.start_run(UserRequest(prompt="inspect", cwd=str(tmp_path)))

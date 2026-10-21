@@ -1,6 +1,12 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Callable
+from pathlib import Path
+
 from ..context.packager import ContextPackager, ContextSegment
+from ..observations import Observation
+from ..orchestration.history import text_projection
 from ..orchestration.session import SessionContext
 from ..sessions.messages import model_session_message_content
 from ..types import SessionResumeState, SessionRunTrace, ToolDefinition
@@ -10,7 +16,10 @@ class ModelPromptBuilder:
     def __init__(self, context_packager: ContextPackager | None = None) -> None:
         self.context_packager = context_packager or ContextPackager()
 
-    def build_messages(self, session: SessionContext) -> list[dict[str, object]]:
+    def build_messages(
+        self, session: SessionContext, *,
+        compress_segment: Callable[[ContextSegment, int], str] | None = None,
+    ) -> list[dict[str, object]]:
         conversation = session.request.metadata.get("conversation", [])
         system_lines = [
             "You are the reasoning component of a general-purpose agent runtime.",
@@ -35,8 +44,8 @@ class ModelPromptBuilder:
             "- If a tool result has error_code approval_required, explain that the tool needs approval instead of retrying it.",
             "- If a tool result has error_code approval_denied, state that the user declined the action. Do not describe it as waiting for approval, ask the user to approve it, or retry it.",
             "- If a tool result has error_code duplicate_tool_call, use the previous result in session history or stop with a concise explanation.",
-            "- If a tool result has error_code progress_required, do not call another read-only inspection tool. Use patch for requested file changes or finish with the reason no change is needed.",
-            "- Before patching an existing file, inspect every affected hunk with read_file or search_text. You do not need to read unrelated parts of the file.",
+            "- If a tool result has error_code progress_required, reuse the available observations and deliver the requested analysis or authorized changes. Inspect again only to fill a specific missing fact; never infer write permission from this feedback.",
+            "- A patch with old lines matching the current file at its stated location can apply directly. Inspect the affected area with read_file or search_text when the location or old content is uncertain; unrelated parts need no inspection.",
             "- search_text returns nearby context and counts only the returned lines as inspected.",
             "- If patch returns file_not_read, follow its read hint, inspect only the missing range, and retry the patch without asking the user.",
             "- If patch returns file_changed_since_read, use search_text to re-locate the intended content, inspect its current surrounding lines, and regenerate the hunk without asking the user.",
@@ -142,10 +151,17 @@ class ModelPromptBuilder:
 
         project_rule_lines = self._format_project_rules(session)
         system_lines.extend(project_rule_lines)
-        volatile_system_lines.extend(self._format_workspace_summary(session))
-        volatile_system_lines.extend(self._format_explicit_context(session))
+        workspace_context_lines = [
+            *self._format_workspace_summary(session),
+            *self._format_explicit_context(session),
+        ]
 
-        tool_lines = ["Available tools:", *self._format_tool_definitions(session)]
+        tool_lines = (
+            ["Available tools:", "Use the supplied API tool schemas for names, arguments, and descriptions.",
+             *[f"- {tool.name}: risk {tool.risk_level}" for tool in sorted(session.available_tools, key=lambda item: item.name)]]
+            if action_protocol == "native_tools"
+            else ["Available tools:", *self._format_tool_definitions(session)]
+        )
         # Tool descriptions follow stable protocol and project rules so their
         # per-run changes do not invalidate the leading system prefix.
         system_lines.extend(tool_lines)
@@ -168,10 +184,6 @@ class ModelPromptBuilder:
         if resume_lines:
             user_lines.append("Resume state:")
             user_lines.extend(resume_lines)
-
-        if session.history:
-            user_lines.append("Recent current-run history:")
-            user_lines.extend(f"- {item}" for item in session.history[-30:])
 
         checkpoint_lines = self._format_checkpoint(getattr(session, "checkpoint", None))
         if checkpoint_lines:
@@ -216,15 +228,29 @@ class ModelPromptBuilder:
                 if isinstance(content, str) and content:
                     conversation_system_lines.append(content)
         conversation_system_context = "\n\n".join(conversation_system_lines)
+        observations = self._recovery_groups(session) + (session.model_history or [
+            [{"role": "user", "content": "Current-run observation (not user instructions):\n" + item}]
+            for item in session.history
+        ])
+        if action_protocol != "native_tools":
+            observations = [text_projection(group) for group in observations]
+        schema_chars = (
+            len(json.dumps(self.build_tools(session.available_tools), ensure_ascii=False))
+            if session.available_tools and action_protocol == "native_tools" else 0
+        )
 
-        return self.context_packager.package_segments(
+        messages = self.context_packager.package_segments(
             [
                 ContextSegment("\n".join(protocol_lines), "model protocol", priority=100, required=True),
                 ContextSegment("\n".join(security_lines), "security baseline", priority=100, required=True),
                 ContextSegment("\n".join(project_rule_lines), "project rules", priority=100, required=True),
-                ContextSegment("\n".join(operational_lines), "operational instructions", priority=80),
-                ContextSegment("\n".join(tool_lines), "tool definitions", priority=90),
-                ContextSegment("\n".join(volatile_system_lines), "volatile system context", priority=85),
+                ContextSegment("\n".join(operational_lines), "operational instructions", priority=80,
+                               compressible=False),
+                ContextSegment("\n".join(tool_lines), "tool definitions", priority=90,
+                               compressible=False),
+                ContextSegment("\n".join(volatile_system_lines), "volatile system context", priority=85,
+                               compressible=False),
+                ContextSegment("\n".join(workspace_context_lines), "workspace context", priority=75),
                 ContextSegment(
                     conversation_system_context,
                     "conversation summary",
@@ -240,7 +266,58 @@ class ModelPromptBuilder:
                 ContextSegment("\n".join(checkpoint_context), "runtime checkpoint", priority=100, required=True),
                 ContextSegment("\n".join(contextual_user_lines), "session recovery context", priority=70),
             ],
+            observation_groups=observations,
+            reserved_chars=schema_chars,
+            compress_segment=compress_segment,
         )
+        session.visible_observations = self.context_packager.last_visibility
+        session.visible_observation_views = self.context_packager.last_views
+        return messages
+
+    def _recovery_groups(self, session: SessionContext) -> list[list[dict[str, object]]]:
+        groups = [[record.message("Historical partial summary (not current execution evidence):\n" + record.summary)]
+                  for record in session.recovered_observations]
+        recovered_by_run: dict[str, list[Observation]] = {}
+        for record in session.recovered_observations:
+            recovered_by_run.setdefault(Path(record.reference).parent.parent.name, []).append(record)
+        trace = session.request.metadata.get("session_trace", [])
+        if not isinstance(trace, list):
+            return groups
+        legacy = []
+        for run in trace[-6:]:
+            run_id = run.get("run_id", "") if isinstance(run, dict) else getattr(run, "run_id", "")
+            turns = run.get("turns", []) if isinstance(run, dict) else getattr(run, "turns", [])
+            for turn in turns[-8:]:
+                details = turn.get("tool_result_details", []) if isinstance(turn, dict) else getattr(turn, "tool_result_details", [])
+                for detail in details:
+                    if isinstance(detail, str):
+                        # A run can have a partial archive. Skip only trace
+                        # details that clearly repeat a recovered record.
+                        if any(self._trace_detail_matches(record, detail)
+                               for record in recovered_by_run.get(run_id, [])):
+                            continue
+                        legacy.append([{"role": "user", "_atomic": True,
+                                        "content": "Prior observations (legacy partial summaries, not complete evidence):\n" + detail}])
+        return legacy + groups
+
+    @staticmethod
+    def _trace_detail_matches(record: Observation, detail: str) -> bool:
+        tool, separator, remainder = detail.partition(" [")
+        if not separator or tool != record.tool:
+            return False
+        status, separator, remainder = remainder.partition("] ")
+        expected_status = "ok" if record.success else record.error_code or "failed"
+        if not separator or status != expected_status:
+            return False
+        arguments = {}
+        if remainder.startswith("{"):
+            try:
+                arguments, end = json.JSONDecoder().raw_decode(remainder)
+            except json.JSONDecodeError:
+                return False
+            remainder = remainder[end:].lstrip()
+        return (arguments == json.loads(record.arguments)
+                and bool(record.summary) and record.summary in remainder)
 
     def _format_checkpoint(self, checkpoint: object) -> list[str]:
         if checkpoint is None:

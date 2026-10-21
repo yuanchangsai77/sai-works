@@ -76,7 +76,7 @@ def test_prompt_includes_workspace_summary(tmp_path):
     assert "Automatically collected context. Use it only when relevant to the user request." in system
     assert "Go: go.mod; suggested tests: go test ./..." in system
     assert "Available tools:" in system
-    assert system.index("### Workspace Summary:") < system.index("Available tools:")
+    assert system.index("Available tools:") < system.index("### Workspace Summary:")
 
 
 def test_workspace_summary_loader_logs_context_event(tmp_path):

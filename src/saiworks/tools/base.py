@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Callable, Protocol
+from typing import Protocol
 
 from ..types import ToolAction, ToolDefinition, ToolResult
 
@@ -15,7 +16,7 @@ class Tool(Protocol):
     evidence_kinds: list[str]
     exposed: bool
 
-    def run(self, action: ToolAction, context: "ToolContext") -> ToolResult:
+    def run(self, action: ToolAction, context: ToolContext) -> ToolResult:
         """Execute a structured tool action."""
 
     def definition(self) -> ToolDefinition:
@@ -46,6 +47,8 @@ class SimpleTool:
     # User-facing run summary only. It is local display logic and must not be
     # written into ToolResult output or metadata.
     summarizer: Callable[[ToolResult], str] | None = None
+    observation_adapter: Callable | None = None
+    observation_valid: Callable | None = None
 
     def run(self, action: ToolAction, context: ToolContext) -> ToolResult:
         return self.handler(action, context)

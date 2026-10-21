@@ -487,7 +487,7 @@ def test_patch_accepts_model_diff_without_trailing_newline(tmp_path):
     assert target.read_text(encoding="utf-8") == "after\n"
 
 
-def test_patch_requires_read_for_existing_file_and_rejects_stale_read(tmp_path):
+def test_patch_accepts_exact_unread_diff_and_rejects_stale_read(tmp_path):
     target = tmp_path / "file.txt"
     target.write_text("before\n", encoding="utf-8")
     registry = make_registry()
@@ -499,16 +499,53 @@ def test_patch_requires_read_for_existing_file_and_rejects_stale_read(tmp_path):
 """
 
     unread = registry.execute(ToolAction(name="patch", arguments={"diff": diff}), cwd=str(tmp_path))
+    target.write_text("before\n", encoding="utf-8")
     registry.execute(ToolAction(name="read_file", arguments={"path": "file.txt"}), cwd=str(tmp_path))
     target.write_text("external\n", encoding="utf-8")
     stale = registry.execute(ToolAction(name="patch", arguments={"diff": diff}), cwd=str(tmp_path))
 
-    assert unread.error_code == "file_not_read"
+    assert unread.success is True
     assert stale.error_code == "file_changed_since_read"
     assert target.read_text(encoding="utf-8") == "external\n"
 
 
-def test_patch_requires_only_the_affected_lines_to_have_been_read(tmp_path):
+def test_unread_patch_does_not_guess_a_different_location(tmp_path):
+    target = tmp_path / "file.txt"
+    target.write_text("header\ntarget\n", encoding="utf-8")
+    registry = make_registry()
+    diff = "--- a/file.txt\n+++ b/file.txt\n@@ -1 +1 @@\n-target\n+changed\n"
+
+    blocked = registry.execute(ToolAction(name="patch", arguments={"diff": diff}), cwd=str(tmp_path))
+
+    assert blocked.error_code == "file_not_read"
+    assert target.read_text(encoding="utf-8") == "header\ntarget\n"
+
+
+def test_unread_zero_context_insertion_requires_an_observed_anchor(tmp_path):
+    target = tmp_path / "file.txt"
+    target.write_text("before\n", encoding="utf-8")
+    registry = make_registry()
+    diff = "--- a/file.txt\n+++ b/file.txt\n@@ -1,0 +2 @@\n+after\n"
+
+    blocked = registry.execute(ToolAction(name="patch", arguments={"diff": diff}), cwd=str(tmp_path))
+
+    assert blocked.error_code == "file_not_read"
+    assert target.read_text(encoding="utf-8") == "before\n"
+
+
+def test_unread_exact_patch_can_recount_incorrect_hunk_lengths(tmp_path):
+    target = tmp_path / "file.txt"
+    target.write_text("before\n", encoding="utf-8")
+    registry = make_registry()
+    diff = "--- a/file.txt\n+++ b/file.txt\n@@ -1,2 +1,2 @@\n-before\n+after\n"
+
+    applied = registry.execute(ToolAction(name="patch", arguments={"diff": diff}), cwd=str(tmp_path))
+
+    assert applied.success is True
+    assert target.read_text(encoding="utf-8") == "after\n"
+
+
+def test_patch_accepts_exact_hunk_outside_read_range(tmp_path):
     target = tmp_path / "file.txt"
     target.write_text("one\ntwo\nthree\nfour\n", encoding="utf-8")
     registry = make_registry()
@@ -528,35 +565,17 @@ def test_patch_requires_only_the_affected_lines_to_have_been_read(tmp_path):
         ),
         cwd=str(tmp_path),
     )
-    blocked = registry.execute(
-        ToolAction(name="patch", arguments={"diff": diff}),
-        cwd=str(tmp_path),
-    )
-    targeted = registry.execute(
-        ToolAction(
-            name="read_file",
-            arguments={"path": "file.txt", "start_line": 2, "end_line": 4},
-        ),
-        cwd=str(tmp_path),
-    )
     applied = registry.execute(
         ToolAction(name="patch", arguments={"diff": diff}),
         cwd=str(tmp_path),
     )
 
     assert prefix.metadata["end_line"] == 1
-    assert blocked.error_code == "file_not_read"
-    assert blocked.metadata["read_hint"] == {
-        "path": "file.txt",
-        "start_line": 2,
-        "end_line": 4,
-    }
-    assert targeted.output == "two\nthree\nfour\n"
     assert applied.success is True
     assert target.read_text(encoding="utf-8") == "one\ntwo\nTHREE\nfour\n"
 
 
-def test_search_context_counts_as_read_but_unreturned_lines_do_not(tmp_path):
+def test_search_context_counts_as_read_and_unreturned_exact_lines_can_be_patched(tmp_path):
     target = tmp_path / "file.txt"
     target.write_text(
         "one\ntwo\nthree\nneedle\nfive\nsix\nseven\neight\n",
@@ -589,7 +608,7 @@ def test_search_context_counts_as_read_but_unreturned_lines_do_not(tmp_path):
         ),
         cwd=str(tmp_path),
     )
-    blocked = registry.execute(
+    unseen_applied = registry.execute(
         ToolAction(name="patch", arguments={"diff": unseen_diff}),
         cwd=str(tmp_path),
     )
@@ -601,7 +620,7 @@ def test_search_context_counts_as_read_but_unreturned_lines_do_not(tmp_path):
     assert ":1:one" in searched.output
     assert ":7:seven" in searched.output
     assert ":8:eight" not in searched.output
-    assert blocked.error_code == "file_not_read"
+    assert unseen_applied.success is True
     assert applied.success is True
     assert "\nNEEDLE\n" in target.read_text(encoding="utf-8")
 

@@ -29,7 +29,12 @@
 | `ToolResult.error_code` | 是，转成 status | 是 | 是 | 稳定错误恢复、policy 判断和展示。 |
 | `ToolResult.metadata` | 默认否；仅特殊字段进入 history | 默认否 | 是 | 给 runtime、测试、日志使用的结构化数据。 |
 | `metadata["action_arguments"]` | 是，特殊例外 | 否 | 是 | engine 附加，用于 session history 和重复调用诊断。 |
+| 运行时观察投影 | 是，受保护头部与可裁剪正文 | 默认否 | 独立归档 | 来源、版本、覆盖范围、完整性、有界脱敏参数与完整材料引用。内部对象不会进入 API 消息。 |
 | `SimpleTool.summarizer` | 否 | 是 | 否 | 只生成用户 run summary，不写入 tool result。 |
+
+本地 `SimpleTool` 可选观察适配器声明目标、选择条件、版本、覆盖范围和完整性；可选有效性校验器用于读取缓存。两者不进入公开工具定义或 MCP schema。未声明语义的工具不会被核心策略按名称或风险等级推断为确定的重复探索。风险等级继续服务授权和既有副作用去重。
+
+注册器在单项预算裁剪前生成观察并脱敏归档；内部 metadata 只携带记录身份和投影完整性，不包含额外完整正文。观察新增不等于完成证据；完成仍使用原有 evidence/checkpoint 契约。
 
 ## 放置原则
 
@@ -104,6 +109,10 @@ ToolResult(
 - `read_file_summary()` 基于 metadata 生成用户 run summary，例如 `read /home/changsai/SaiWorks/README.md (4096 bytes truncated)`；这个摘要不写回 `ToolResult.output`。
 - 如果读取的是二进制文件，工具返回 `success=False`、`error_code="binary_file"`，`output` 放模型可见的失败原因，`metadata` 保留路径和文件大小供日志/摘要使用。
 
+## 修改工具：`patch`
+
+已有文件的补丁若包含旧内容或上下文，且这些行与当前文件的补丁指定位置精确匹配，可在未先行读取时应用。若指定位置已变化，仅对模型确实看过的旧内容尝试唯一位置重定位；无旧内容的插入仍需先查看插入锚点。不能验证目标时沿用现有 `file_not_read`、`file_changed_since_read` 或 `patch_context_mismatch` 恢复结果。路径授权与 `git apply --check` 继续生效；直接核验的补丁不使用宽松的 Git 回退选项重新猜测位置。
+
 ## 会话控制工具：`workspace_open`
 
 `workspace_open` 是读取级的结构化会话控制工具，参数为目录 `path`。成功时 `output` 只确认活动
@@ -136,12 +145,12 @@ ToolResult(
 
 ## 当前边界
 
-当前实现中，`ToolRegistry` 先统一包装结果；`SessionContext.add_tool_result()` 只把有界
-`output`、状态、`error_code` 和特殊的 `metadata["action_arguments"]` 写入 session history。
+当前实现中，`ToolRegistry` 先统一包装结果；`SessionContext.add_tool_result()` 将有界
+`output`、状态、`error_code`、动作参数与上述来源白名单投影到模型工作集。普通 metadata 仍不直接进入模型。
 其中长 action argument 不会重复内联，避免失败的大型 diff 或文档在每轮 prompt 中倍增；完整参数
 写入当前 run 的 artifact，history 和事件日志只保留字符数、哈希与 `action_artifact_ref`。checkpoint
 保存任务身份、工作区 revision、类型化证据和实际交付 artifact，不把动作输入误当成任务产物。
-`ModelPromptBuilder` 再把 session history 放进模型输入。
+`ModelPromptBuilder` 按完整交互组装工作集：原生工具协议保留调用与返回的配对，内容动作协议消费相同观察的文本投影。合成恢复反馈不能冒充模型发起的工具调用。旧的纯文本 history 仅保留诊断和兼容投影用途，不与结构化工作集重复拼接。
 
 事件日志是轻量索引，不直接承载完整参数或输出。每个 run 只归档首个完整模型请求，后续正常请求与
 响应只记录大小、用量和 SHA-256 指纹；小型工具参数和结果直接内联，大型正文经脱敏后内容寻址，

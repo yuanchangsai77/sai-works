@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ...types import ToolAction, ToolResult
 from ..base import SimpleTool, ToolContext
+from ..observation_adapters import query_observation
 from ..shared import resolve_workspace_path, retarget, run_command, schema
 from ..summary import git_diff_summary
 from .git_common import ensure_git_repository, git_failure
@@ -18,6 +19,7 @@ def tool() -> SimpleTool:
         evidence_kinds=["read"],
         handler=run,
         summarizer=git_diff_summary,
+        observation_adapter=query_observation(),
     )
 
 
@@ -36,7 +38,7 @@ def run(action: ToolAction, context: ToolContext) -> ToolResult:
         diff_path = str(resolved.path.relative_to(resolved.root))
         command.extend(["--", diff_path])
 
-    result = run_command(command, cwd, shell=False)
+    result = run_command(command, cwd, shell=False, max_output_bytes=None)
     if not result.success:
         return git_failure(action.name, result, "git_diff_failed", "git diff failed")
 

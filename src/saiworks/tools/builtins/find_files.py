@@ -6,6 +6,7 @@ import threading
 
 from ...types import ToolAction, ToolResult
 from ..base import SimpleTool, ToolContext
+from ..observation_adapters import query_observation
 from ..shared import path_error, positive_int, resolve_workspace_path, retarget, schema
 from ..summary import match_count_summary
 
@@ -38,6 +39,7 @@ def tool(default_max_results: int = DEFAULT_SEARCH_RESULTS) -> SimpleTool:
         evidence_kinds=["read"],
         handler=lambda action, context: run(action, context, default_max_results),
         summarizer=match_count_summary,
+        observation_adapter=query_observation("pattern", "include_hidden", "include_ignored"),
     )
 
 

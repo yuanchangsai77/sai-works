@@ -7,6 +7,7 @@
 | [共享信任域](trust-domain.md) | 身份、设备、凭据、票据、访问和连接 | 本地策略只是实现起点 |
 | [授权交互](approval.md) | 多壳、后台与跨会话审批关联及有效性 | 同步确认回调、后台阻塞 |
 | [执行目标](execution-targets.md) | 目标约束、远程节点、容量、租约与故障协调 | 本地 Executor 与 MCP 适配 |
+| [观察记录与模型工作集](observation-working-set.md) | 来源、可见性、恢复与重复探索的分离 | 内部实现与验收基线；公开 schema 不变 |
 | [执行账本](execution-ledger.md) | 授权、执行、证据和检查点的可查询关系 | 日志、trace 与检查点 |
 | [壳与内核边界设计](shell-core-boundary.md) | 权威状态、生命周期、上下文绑定与多壳同步 | 首版行为决策已确认，B/C 运行职责已提取 |
 | [壳与内核拆分实施计划](shell-core-migration.md) | 能力映射、职责迁移、阶段验收和兼容策略 | A/B/C 完成，D1 观察已实施；D2/D3/E/F 待实施 |

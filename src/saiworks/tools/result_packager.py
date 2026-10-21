@@ -4,7 +4,6 @@ import hashlib
 
 from ..types import ToolResult
 
-
 TRUNCATION_MARKER = "\n...truncated by tool result budget..."
 
 
@@ -28,6 +27,12 @@ class ToolResultPackager:
         result.metadata["output_visible_bytes"] = visible_bytes
         result.metadata["output_sha256"] = digest
         result.metadata["truncated"] = bool(result.metadata.get("truncated")) or clipped
+        if clipped and result.name == "read_file" and isinstance(result.metadata.get("start_line"), int):
+            prefix_bytes = max(0, self.max_output_bytes - len(TRUNCATION_MARKER.encode("utf-8")))
+            prefix = encoded[:prefix_bytes].decode("utf-8", errors="ignore")
+            lines = prefix.splitlines(keepends=True)
+            complete_lines = len(lines) - int(bool(lines) and not lines[-1].endswith(("\n", "\r")))
+            result.metadata["end_line"] = result.metadata["start_line"] + complete_lines - 1
         return result
 
     def _clip(self, encoded: bytes) -> str:

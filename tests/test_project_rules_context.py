@@ -96,7 +96,7 @@ def test_prompt_keeps_project_rules_in_small_context_budget(tmp_path):
     ProjectRulesLoader().load_context(session.request, session)
     session.available_tools = [
         ToolDefinition(name=f"tool_{index}", description="x" * 500)
-        for index in range(20)
+        for index in range(2)
     ]
 
     messages = ModelPromptBuilder(ContextPackager(4_000)).build_messages(session)

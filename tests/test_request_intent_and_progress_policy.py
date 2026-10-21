@@ -3,11 +3,14 @@ from __future__ import annotations
 import pytest
 
 from saiworks.intent import RequestIntent, RequestIntentClassifier
+from saiworks.observations import Observation, ObservationSpec
 from saiworks.orchestration.progress import (
     DefaultProgressPolicy,
     ProgressContext,
 )
-from saiworks.types import ToolResult
+from saiworks.tools.base import ToolContext
+from saiworks.tools.observation_adapters import file_observation, query_observation
+from saiworks.types import ToolAction, ToolResult
 
 
 @pytest.mark.parametrize(
@@ -57,6 +60,24 @@ def test_request_intent_classifier_accepts_explicit_overrides():
     assert intent == RequestIntent(project_request=True, file_changes=True)
 
 
+@pytest.mark.parametrize("tool,first,second,metadata", [
+    ("find_files", {"pattern": "*.tsx"}, {"pattern": "*.vue"}, {}),
+    ("find_files", {"pattern": "*.py"}, {"pattern": "*.py", "include_hidden": True}, {}),
+    ("find_files", {"pattern": "*.py"}, {"pattern": "*.py", "include_ignored": True}, {}),
+    ("search_text", {"query": "React"}, {"query": "Vue"}, {}),
+    ("read_file", {"path": "a.md"}, {"path": "a.md"}, {"start_line": 2, "end_line": 2}),
+])
+def test_observation_identity_distinguishes_search_scope_and_actual_read_range(tool, first, second, metadata):
+    original_metadata = {"start_line": 1, "end_line": 1} if tool == "read_file" else {}
+    original = ToolResult(tool, True, "same output", metadata={"action_arguments": first, **original_metadata})
+    current = ToolResult(tool, True, "same output", metadata={"action_arguments": second, **metadata})
+    adapter = file_observation if tool == "read_file" else query_observation("pattern", "query", "include_hidden", "include_ignored")
+    def key(result):
+        action = ToolAction(tool, result.metadata["action_arguments"])
+        return Observation.create(action, result, "/repo", spec=adapter(action, result, ToolContext("/repo"))).evidence_key
+    assert key(original) != key(current)
+
+
 def test_request_intent_classifier_does_not_turn_a_write_request_into_an_evidence_contract():
     intent = RequestIntentClassifier().classify("create a project")
 
@@ -83,10 +104,13 @@ def test_progress_policy_triggers_on_first_duplicate_read_for_change_request():
         },
     )
 
+    result.metadata["_observation"] = Observation.create(ToolAction("read_file", {"path": "app.py"}), result, "/repo",
+                                                        spec=ObservationSpec(certain=True)).payload()
     signal = DefaultProgressPolicy().evaluate(
         ProgressContext(
             intent=RequestIntent(project_request=True, file_changes=True),
             results=[result],
+            previous_results=[result],
             recovery_sent=False,
         )
     )

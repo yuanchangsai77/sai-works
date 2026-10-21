@@ -4,9 +4,17 @@ from pathlib import Path
 
 from ...types import ToolAction, ToolResult
 from ..base import SimpleTool, ToolContext
-from ..shared import path_error, positive_int, resolve_workspace_path, retarget, run_command, schema
-from ..summary import match_count_summary
+from ..observation_adapters import query_observation
 from ..observation_state import record_observation, snapshot, text_lines
+from ..shared import (
+    path_error,
+    positive_int,
+    resolve_workspace_path,
+    retarget,
+    run_command,
+    schema,
+)
+from ..summary import match_count_summary
 
 MAX_SEARCH_RESULTS = 2_000
 DEFAULT_SEARCH_RESULTS = 200
@@ -37,6 +45,7 @@ def tool(default_max_results: int = DEFAULT_SEARCH_RESULTS) -> SimpleTool:
         evidence_kinds=["read"],
         handler=lambda action, context: run(action, context, default_max_results),
         summarizer=match_count_summary,
+        observation_adapter=query_observation("query", "context_lines"),
     )
 
 
@@ -70,7 +79,14 @@ def run(action: ToolAction, context: ToolContext, default_max_results: int = DEF
     if not result.success:
         return retarget(result, action.name)
 
-    result_lines = str(result.metadata.get("stdout", "")).splitlines()
+    stdout = str(result.metadata.get("stdout", ""))
+    # run_command can clip stdout before this tool applies its match limit.
+    source_clipped = stdout.endswith("\n...truncated...")
+    if source_clipped:
+        stdout = stdout.removesuffix("\n...truncated...")
+    result_lines = stdout.splitlines()
+    if source_clipped and stdout and not stdout.endswith(("\n", "\r")):
+        result_lines = result_lines[:-1]
     match_lines = result_lines[:max_results]
     parsed = []
     displayed: list[str] = []
@@ -120,7 +136,9 @@ def run(action: ToolAction, context: ToolContext, default_max_results: int = DEF
         output="\n".join(displayed) if displayed else "no matches",
         metadata={
             "count": len(match_lines),
-            "truncated": len(result_lines) > len(match_lines),
+            # rg --max-count limits each file, so reaching our result limit
+            # cannot prove that the search covered all matches.
+            "truncated": source_clipped or len(result_lines) >= max_results,
             "matches": parsed,
             "context_lines": context_lines,
         },

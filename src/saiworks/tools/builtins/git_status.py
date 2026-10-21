@@ -4,6 +4,7 @@ from pathlib import Path
 
 from ...types import ToolAction, ToolResult
 from ..base import SimpleTool, ToolContext
+from ..observation_adapters import query_observation
 from ..shared import run_command, schema
 from ..summary import git_status_summary
 from .git_common import ensure_git_repository, git_failure
@@ -17,6 +18,7 @@ def tool() -> SimpleTool:
         input_schema=schema({}),
         handler=run,
         summarizer=git_status_summary,
+        observation_adapter=query_observation(),
     )
 
 
@@ -26,8 +28,8 @@ def run(action: ToolAction, context: ToolContext) -> ToolResult:
     if repository_error is not None:
         return repository_error
 
-    branch = run_command(["git", "branch", "--show-current"], cwd, shell=False)
-    status = run_command(["git", "status", "--porcelain"], cwd, shell=False)
+    branch = run_command(["git", "branch", "--show-current"], cwd, shell=False, max_output_bytes=None)
+    status = run_command(["git", "status", "--porcelain"], cwd, shell=False, max_output_bytes=None)
     if not branch.success:
         return git_failure(action.name, branch, "git_status_failed", "git branch failed")
     if not status.success:

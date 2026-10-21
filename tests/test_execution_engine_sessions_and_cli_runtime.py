@@ -1604,7 +1604,7 @@ def test_engine_keeps_read_state_within_single_execute(tmp_path):
     assert (tmp_path / "target.txt").read_text(encoding="utf-8") == "after\n"
 
 
-def test_engine_recovers_unread_patch_without_interrupting_the_user(tmp_path):
+def test_engine_applies_exact_unread_patch_without_an_extra_model_turn(tmp_path):
     target = tmp_path / "target.txt"
     target.write_text("before\n", encoding="utf-8")
     diff = "--- a/target.txt\n+++ b/target.txt\n@@ -1 +1 @@\n-before\n+after\n"
@@ -1620,27 +1620,6 @@ def test_engine_recovers_unread_patch_without_interrupting_the_user(tmp_path):
                     actions=[ToolAction(name="patch", arguments={"diff": diff})],
                     done=True,
                 )
-            if any(result.error_code == "file_not_read" for result in session.tool_results):
-                if not any(result.name == "read_file" for result in session.tool_results):
-                    return ModelReply(
-                        message="inspect affected line",
-                        actions=[
-                            ToolAction(
-                                name="read_file",
-                                arguments={
-                                    "path": "target.txt",
-                                    "start_line": 1,
-                                    "end_line": 1,
-                                },
-                            )
-                        ],
-                        done=False,
-                    )
-                return ModelReply(
-                    message="changed",
-                    actions=[ToolAction(name="patch", arguments={"diff": diff})],
-                    done=True,
-                )
             raise AssertionError("unexpected model state")
 
     logger = InMemoryLogger()
@@ -1652,13 +1631,8 @@ def test_engine_recovers_unread_patch_without_interrupting_the_user(tmp_path):
         logger=logger,
     ).execute(UserRequest(prompt="update target", cwd=str(tmp_path)))
 
-    assert model.calls == 3
-    assert [result.name for result in summary.tool_results] == [
-        "patch",
-        "read_file",
-        "patch",
-    ]
-    assert summary.tool_results[0].error_code == "file_not_read"
+    assert model.calls == 1
+    assert [result.name for result in summary.tool_results] == ["patch"]
     assert summary.tool_results[-1].success is True
     assert target.read_text(encoding="utf-8") == "after\n"
 
@@ -1714,7 +1688,7 @@ def test_engine_does_not_force_model_turn_after_automatic_patch_relocation(tmp_p
 def test_engine_resets_read_state_between_executes(tmp_path):
     target = tmp_path / "target.txt"
     target.write_text("before\n", encoding="utf-8")
-    diff = "--- a/target.txt\n+++ b/target.txt\n@@ -1 +1 @@\n-before\n+after\n"
+    diff = "--- a/target.txt\n+++ b/target.txt\n@@ -1,0 +2 @@\n+after\n"
 
     class SingleActionModel:
         def __init__(self, action):

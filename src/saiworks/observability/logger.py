@@ -1,11 +1,17 @@
 from __future__ import annotations
 
-import json
 import hashlib
+import json
 from pathlib import Path
 
 from ..safety.redaction import redact, redact_text
-from ..types import EvidenceRecord, RuntimeBlocker, SessionRunTrace, SessionTurnTrace, TaskCheckpoint
+from ..types import (
+    EvidenceRecord,
+    RuntimeBlocker,
+    SessionRunTrace,
+    SessionTurnTrace,
+    TaskCheckpoint,
+)
 from .events import Event
 
 
@@ -113,6 +119,7 @@ class InMemoryLogger:
             archived_metadata = {
                 str(key): value for key, value in metadata.items()
                 if key not in {
+                    "_observation", "_observation_body_complete",
                     "action_arguments", "action_artifact_ref", "previous_output",
                     "stdout", "stderr", "content", "body", "raw_response",
                 }
@@ -492,7 +499,12 @@ class InMemoryLogger:
                 name = result.get("name", "tool")
                 status = "ok" if result.get("success") else result.get("error_code") or "failed"
                 output = self._compact_text(str(result.get("output_preview", "")), 320)
-                tool_result_details.append(f"{name} [{status}] {output}")
+                arguments_ref = result.get("arguments_ref", {})
+                arguments = arguments_ref.get("value", {})
+                source = self._compact_text(json.dumps(arguments, ensure_ascii=False), 200) if arguments else ""
+                reference = result.get("result_ref", {}).get("artifact_ref", "")
+                suffix = f" result_ref={reference}" if reference else ""
+                tool_result_details.append(f"{name} [{status}] {source} {output}{suffix}")
             turn_summaries.append(
                 SessionTurnTrace(
                     turn=turn["turn"],

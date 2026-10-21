@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from ...types import ToolAction, ToolResult
 from ..base import SimpleTool, ToolContext
+from ..observation_adapters import control_observation
 from ..shared import path_error, resolve_workspace_path, retarget, schema
 
 
@@ -13,6 +14,7 @@ def tool() -> SimpleTool:
         input_schema=schema({"path": {"type": "string"}}, required=["path"]),
         evidence_kinds=["read"],
         handler=run,
+        observation_adapter=control_observation,
     )
 
 

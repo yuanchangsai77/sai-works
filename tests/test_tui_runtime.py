@@ -728,7 +728,7 @@ def test_composer_rows_renders_slash_command_completion_menu():
     assert any("Commands (" in row for row in plain_rows)
     assert any("/clear" in row for row in plain_rows)
     assert any("/compact" in row for row in plain_rows)
-    assert any("▼ (9 more below)" in row for row in plain_rows)
+    assert any(f"▼ ({len(matches) - 5} more below)" in row for row in plain_rows)
 
     # Scroll selection down to /status
     status_idx = next(i for i, (cmd, _) in enumerate(matches) if cmd == "/status")
