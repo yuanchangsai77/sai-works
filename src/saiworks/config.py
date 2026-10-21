@@ -39,7 +39,7 @@ class OrchestrationConfig:
     max_turns: int = 100
     max_model_attempts: int = 120
     max_consecutive_model_timeouts: int = 8
-    max_run_seconds: float = 900.0
+    max_run_seconds: float = 0.0
     subagent_max_model_retries: int = 1
     subagent_model_timeout: float = 120.0
     approval_ttl_seconds: int = 300
@@ -149,8 +149,8 @@ def _load_tuning(cwd: str | Path | None) -> tuple[ModelRetryConfig, Orchestratio
             ),
             max_run_seconds=_bounded_float(
                 values.get("orchestration.max_run_seconds"),
-                900.0,
-                1.0,
+                0.0,
+                0.0,
                 MAX_RUN_SECONDS,
                 "orchestration.max_run_seconds",
             ),

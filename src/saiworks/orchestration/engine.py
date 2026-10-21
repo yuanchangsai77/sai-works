@@ -44,6 +44,11 @@ class ExecutionContext:
     session: SessionContext | None = None
     tools_closed: bool = False
     terminal_summary: ExecutionSummary | None = None
+    approval_wait_seconds: float = 0.0
+
+
+class _ModelAttemptBudgetReached(BaseException):
+    """Stop context compression before exceeding the existing model attempt budget."""
 
 
 class ExecutionEngine:
@@ -103,7 +108,7 @@ class ExecutionEngine:
         max_turns: int = 100,
         max_model_attempts: int = 120,
         max_consecutive_model_timeouts: int = 8,
-        max_run_seconds: float = 900.0,
+        max_run_seconds: float = 0.0,
         mcp_server_count: int = 0,
         intent_classifier: RequestIntentClassifier | None = None,
         progress_policy: ProgressPolicy | None = None,
@@ -121,7 +126,7 @@ class ExecutionEngine:
         self.max_turns = max(1, int(max_turns))
         self.max_model_attempts = max(1, int(max_model_attempts))
         self.max_consecutive_model_timeouts = max(1, int(max_consecutive_model_timeouts))
-        self.max_run_seconds = max(1.0, float(max_run_seconds))
+        self.max_run_seconds = max(0.0, float(max_run_seconds))
         self.run_budget_policy = RunBudgetPolicy(
             max_model_attempts=self.max_model_attempts,
             max_consecutive_model_timeouts=self.max_consecutive_model_timeouts,
@@ -866,7 +871,7 @@ class ExecutionEngine:
         consecutive_model_timeouts: int,
     ) -> RuntimeBlocker | None:
         return self.run_budget_policy.problem(
-            run_started,
+            run_started + self._execution_context.approval_wait_seconds,
             model_attempts,
             consecutive_model_timeouts,
         )
@@ -1142,10 +1147,15 @@ class ExecutionEngine:
     def _approval_decision(self, action, reason: str) -> bool | None:
         if self.approval_callback is None:
             return None
-        approved = self.approval_callback(action, reason)
+        started = time.monotonic()
+        try:
+            approved = self.approval_callback(action, reason)
+        finally:
+            waited = max(0.0, time.monotonic() - started)
+            self._execution_context.approval_wait_seconds += waited
         self.logger.record(
             "safety.approval",
-            {"tool": action.name, "approved": approved, "reason": reason},
+            {"tool": action.name, "approved": approved, "reason": reason, "wait_seconds": waited},
         )
         return bool(approved)
 

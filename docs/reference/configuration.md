@@ -42,8 +42,9 @@ max_turns = 100
 max_model_attempts = 120
 # 连续模型超时达到该值时打开熔断器。默认 8，内部硬上限 50。
 max_consecutive_model_timeouts = 8
-# 一次 run 的总墙钟预算。默认 900 秒，内部硬上限 86400 秒。
-max_run_seconds = 900
+# 可选的一次 run 执行时间上限，不含同步等待用户审批。默认 0（关闭）；
+# 设为正数时启用，内部硬上限 86400 秒。与单次模型请求超时独立。
+max_run_seconds = 0
 # 后台子会话单次模型请求失败后的最大重试次数。
 # 默认 1，且不会超过 model.retry.max_retries。
 subagent_max_model_retries = 1
@@ -94,8 +95,8 @@ read_timeout = 300
 因此默认预算更长，但仍受 300 秒内部硬上限和独立重试次数约束。
 
 `max_model_attempts` 统计真实 HTTP/model 调用，`max_turns` 统计取得有效模型回复后的语义轮次；一次
-请求的 retry 不会增加 semantic turn。`max_run_seconds`、attempt 总数或连续超时任一达到边界，runtime
-都会保存 partial checkpoint 并返回结构化 `exhausted`，不会继续放大相同失败。
+请求的 retry 不会增加 semantic turn。attempt 总数、连续超时或显式启用的 `max_run_seconds`
+达到边界时，runtime 会保存 partial checkpoint 并返回结构化 `exhausted`，不会继续放大相同失败。
 
 `prompt_context_chars` 约束最终 messages 包。系统规则、当前请求和 runtime checkpoint 优先保留；
 旧 conversation 从新到旧装入剩余预算，超限时写入省略标记。该值是字符层安全预算，不等同于模型

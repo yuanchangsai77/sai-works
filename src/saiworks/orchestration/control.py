@@ -3,9 +3,14 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 
-from ..types import EvidenceRecord, RuntimeBlocker, TaskCheckpoint, ToolResult, UserRequest
+from ..types import (
+    EvidenceRecord,
+    RuntimeBlocker,
+    TaskCheckpoint,
+    ToolResult,
+    UserRequest,
+)
 from .session import SessionContext
-
 
 CUMULATIVE_EVIDENCE_KINDS = frozenset({"workspace_change", "artifact"})
 
@@ -31,7 +36,7 @@ def valid_evidence_kinds(checkpoint: TaskCheckpoint) -> set[str]:
 class RunBudgetPolicy:
     max_model_attempts: int = 120
     max_consecutive_model_timeouts: int = 8
-    max_run_seconds: float = 900.0
+    max_run_seconds: float = 0.0
 
     def problem(
         self,
@@ -39,11 +44,10 @@ class RunBudgetPolicy:
         model_attempts: int,
         consecutive_model_timeouts: int,
     ) -> RuntimeBlocker | None:
-        elapsed = time.monotonic() - run_started
-        if elapsed >= self.max_run_seconds:
+        if self.max_run_seconds > 0 and time.monotonic() - run_started >= self.max_run_seconds:
             return RuntimeBlocker(
                 error_code="run_time_budget_exhausted",
-                summary=f"Run stopped after reaching its {self.max_run_seconds:g}-second wall-clock budget.",
+                summary=f"Run stopped after reaching its {self.max_run_seconds:g}-second execution-time budget (excluding approval waits).",
                 source="runtime",
                 retryability="conditional",
                 required_action="resume",

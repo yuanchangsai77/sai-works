@@ -48,6 +48,7 @@ def test_load_runtime_config_defaults_and_timeout_fallbacks(monkeypatch):
     assert config.model_name == "gpt-5.4"
     assert config.model_timeout == 60.0
     assert config.model_stream_max_seconds == 900.0
+    assert config.orchestration.max_run_seconds == 0.0
     assert config.mode == "confirm"
     assert config.orchestration.subagent_model_timeout == 120.0
 
