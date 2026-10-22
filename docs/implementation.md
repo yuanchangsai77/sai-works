@@ -55,4 +55,6 @@ Desktop V0.1a 新增 GUI 无关的 `DesktopController`：它仅保持壳本地�
 
 关键测试位于 `tests/`，包括 engine/session、CLI dispatch、model protocol、policy、MCP、capability、subagent 和 TUI 场景。本页不维护易失效的测试总数或未重新执行的“全部通过”结论。
 
+本地 Coding 任务已有独立的真实模型验收入口，场景与判据见[本地 Coding 任务验收](evaluation.md)。它提供可复盘的任务级结果；尚未积累跨模型、跨故障场景的稳定性证据。
+
 修改实现后更新本页对应差距及专题边界；目标架构只在职责变化时更新。历史测试结果不作为当前自动验收依据；需要复盘的根因见[精选历史](archive/README.md)。

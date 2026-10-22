@@ -9,6 +9,8 @@ SaiWorks 的长期定位是 **Execution Core / Agent Execution Runtime**：把�
 3. [演进路线](roadmap.md)：演进依赖、近期工作和验收条件。
 4. 按问题阅读下面的机制、接入、交互和参考文档。
 
+真实模型任务验收见[本地 Coding 任务验收](evaluation.md)。
+
 ## 文档状态与权威来源
 
 | 状态 | 含义 | 权威来源 |
