@@ -1425,7 +1425,7 @@ def test_engine_allows_patch_in_auto_mode_without_prompting(tmp_path):
     assert (tmp_path / "auto.py").read_text(encoding="utf-8") == "print('auto')\n"
 
 
-def test_engine_remembers_approved_risk_group_within_execute(tmp_path):
+def test_engine_requires_new_approval_when_command_changes(tmp_path):
     class ShellModel:
         calls = 0
 
@@ -1455,9 +1455,35 @@ def test_engine_remembers_approved_risk_group_within_execute(tmp_path):
 
     summary = engine.execute(UserRequest(prompt="run commands", cwd=str(tmp_path)))
 
-    assert approvals == ["printf one"]
+    assert approvals == ["printf one", "printf two"]
     assert len(summary.tool_results) == 2
     assert all(result.success for result in summary.tool_results)
+
+
+def test_engine_reuses_approval_for_identical_retry(tmp_path):
+    class RetryModel:
+        calls = 0
+
+        def respond(self, _session):
+            self.calls += 1
+            return ModelReply(
+                message="retry failed command",
+                actions=[ToolAction("shell_exec", {"command": "false"})],
+                done=self.calls == 2,
+            )
+
+    approvals = []
+    logger = InMemoryLogger()
+    engine = ExecutionEngine(
+        model=RetryModel(),
+        tools=build_builtin_registry(logger),
+        guardrails=Guardrails(policy=DefaultPolicy(), logger=logger),
+        logger=logger,
+        approval_callback=lambda action, _reason: approvals.append(action.arguments["command"]) or True,
+    )
+
+    engine.execute(UserRequest(prompt="run command", cwd=str(tmp_path)))
+    assert approvals == ["false"]
 
 
 def test_engine_does_not_remember_destructive_approval(tmp_path):

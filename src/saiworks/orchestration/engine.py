@@ -249,7 +249,7 @@ class ExecutionEngine:
 
         consecutive_non_retryable_turns = 0
         consecutive_failed_test_turns = 0
-        approved_risk_groups: set[tuple[str, str]] = set()
+        approved_actions: set[tuple[str, str, str]] = set()
         completed_actions: dict[str, ToolResult] = {}
         duplicate_counts: dict[str, int] = {}
         progress_recovery_sent = False
@@ -515,15 +515,15 @@ class ExecutionEngine:
                     continue
                 decision = self.guardrails.check(action, definition)
                 if decision.requires_confirmation:
-                    approval_key = (action.name, decision.risk_level)
+                    approval_key = (action_cwd, decision.risk_level, action_key)
                     approval = (
                         True
-                        if self._approval_remembered(approval_key, approved_risk_groups)
+                        if self._approval_remembered(approval_key, approved_actions)
                         else self._approval_decision(action, decision.reason)
                     )
                     if approval is True:
                         if decision.risk_level != "destructive":
-                            approved_risk_groups.add(approval_key)
+                            approved_actions.add(approval_key)
                         result = self._execute_action(
                             action,
                             action_cwd,
@@ -1208,8 +1208,8 @@ class ExecutionEngine:
             for result in results
         )
 
-    def _approval_remembered(self, approval_key: tuple[str, str], approved_risk_groups: set[tuple[str, str]]) -> bool:
-        return approval_key[1] != "destructive" and approval_key in approved_risk_groups
+    def _approval_remembered(self, approval_key: tuple[str, str, str], approved_actions: set[tuple[str, str, str]]) -> bool:
+        return approval_key[1] != "destructive" and approval_key in approved_actions
 
     def _approval_decision(self, action, reason: str) -> bool | None:
         if self.approval_callback is None:
