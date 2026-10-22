@@ -48,8 +48,11 @@ class ExecutionContext:
     approval_wait_seconds: float = 0.0
 
 
-class _ModelAttemptBudgetReached(BaseException):
-    """Stop context compression before exceeding the existing model attempt budget."""
+class _RunBudgetReached(BaseException):
+    """Stop auxiliary model requests at an existing run budget boundary."""
+
+    def __init__(self, blocker: RuntimeBlocker) -> None:
+        self.blocker = blocker
 
 
 class ExecutionEngine:
@@ -268,8 +271,11 @@ class ExecutionEngine:
         def before_model_request() -> None:
             nonlocal model_attempts
             self._raise_if_cancelled()
-            if model_attempts >= self.max_model_attempts:
-                raise _ModelAttemptBudgetReached
+            problem = self._run_budget_problem(
+                run_started, model_attempts, consecutive_model_timeouts,
+            )
+            if problem is not None:
+                raise _RunBudgetReached(problem)
             model_attempts += 1
             session.checkpoint.runtime_state["model_attempts"] = str(model_attempts)
 
@@ -342,11 +348,15 @@ class ExecutionEngine:
                         reply = self.model.respond(session)
                         consecutive_model_timeouts = 0
                         self._raise_if_cancelled()
-                        break
-                    except _ModelAttemptBudgetReached:
-                        budget_problem = self._run_budget_problem(
+                        elapsed_problem = self._run_budget_problem(
                             run_started, model_attempts, consecutive_model_timeouts,
                         )
+                        if elapsed_problem is not None and elapsed_problem.error_code == "run_time_budget_exhausted":
+                            budget_problem = elapsed_problem
+                            break
+                        break
+                    except _RunBudgetReached as error:
+                        budget_problem = error.blocker
                         break
                     except (ModelRetryableError, TimeoutError) as error:
                         if self._is_timeout_error(error):

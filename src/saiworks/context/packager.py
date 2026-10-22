@@ -4,7 +4,7 @@ import json
 from collections.abc import Callable
 from dataclasses import dataclass
 
-from ..observations import Observation
+from ..observations import Observation, fingerprint
 
 CURRENT_RUN_CONTEXT_PREFIX = (
     "Current run context (runtime-generated; not part of the user request):"
@@ -13,6 +13,10 @@ CURRENT_RUN_CONTEXT_PREFIX = (
 
 class ContextBudgetExceededError(RuntimeError):
     """The required instructions and current user request cannot fit together."""
+
+
+class ContextSummaryTooLongError(ContextBudgetExceededError):
+    """A semantic summary could not fit its current target length."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -67,6 +71,8 @@ class ContextPackager:
         observation_groups: list[list[dict[str, object]]] | None = None,
         reserved_chars: int = 0,
         compress_segment: Callable[[ContextSegment, int], str] | None = None,
+        working_set_summary_cache: dict[str, object] | None = None,
+        workspace_revision: int = 0,
     ) -> list[dict[str, object]]:
         # Keep the current request whole. Optional history and run state use only
         # the capacity left after required system instructions and the request.
@@ -169,15 +175,28 @@ class ContextPackager:
             0,
             budget - len(system) - len(current) - len(trailing_message),
         )
-        observation_limit = max(0, working_limit - marker_reserve - reserve_pair)
-        observations, omitted_observations, truncated_observations = self._select_observations(groups, observation_limit)
-        omitted_observations += invalid_groups
-        if omitted_observations and len(omission_marker) <= working_limit - sum(
-            self._message_cost(message) for message in observations
-        ):
-            observations.insert(0, {"role": "user", "content": omission_marker})
-        history_limit = working_limit - sum(self._message_cost(item) for item in observations)
-        selected, omitted = self._select_history(conversation, history_limit)
+        summary_message = None
+        if compress_segment is not None and observation_cost + full_history_cost > working_limit:
+            compressed = self._compress_working_set(
+                groups, full_history, working_limit, compress_segment,
+                working_set_summary_cache, workspace_revision,
+            )
+        else:
+            compressed = None
+        if compressed is not None:
+            observations, selected, summary_message, omitted_observations, omitted = compressed
+            truncated_observations = 0
+            omitted_observations += invalid_groups
+        else:
+            observation_limit = max(0, working_limit - marker_reserve - reserve_pair)
+            observations, omitted_observations, truncated_observations = self._select_observations(groups, observation_limit)
+            omitted_observations += invalid_groups
+            if omitted_observations and len(omission_marker) <= working_limit - sum(
+                self._message_cost(message) for message in observations
+            ):
+                observations.insert(0, {"role": "user", "content": omission_marker})
+            history_limit = working_limit - sum(self._message_cost(item) for item in observations)
+            selected, omitted = self._select_history(conversation, history_limit)
         self.last_views = [
             {"observation_id": message["_observation"].identifier,
              "complete": bool(message.get("_complete")),
@@ -188,7 +207,9 @@ class ContextPackager:
         ]
         self.last_visibility = frozenset(view["observation_id"] for view in self.last_views if view["complete"])
 
-        included = len(system) + len(current) + len(trailing_message) + sum(
+        included = len(system) + len(current) + len(trailing_message) + (
+            self._message_cost(summary_message) if summary_message is not None else 0
+        ) + sum(
             self._message_cost(item) for item in [*selected, *observations]
         )
         self.last_stats = ContextPackageStats(
@@ -208,9 +229,122 @@ class ContextPackager:
         ]
         if trailing:
             messages.append({"role": "user", "content": trailing_message})
+        if summary_message is not None:
+            messages.append(summary_message)
         messages.extend({key: value for key, value in message.items() if not key.startswith("_")}
                         for message in observations)
         return messages
+
+    def _compress_working_set(
+        self,
+        groups: list[list[dict[str, object]]],
+        history: list[dict[str, object]],
+        limit: int,
+        compress_segment: Callable[[ContextSegment, int], str],
+        summary_cache: dict[str, object] | None,
+        workspace_revision: int,
+    ) -> tuple[list[dict[str, object]], list[dict[str, object]], dict[str, str], int, int] | None:
+        prefix = "[Runtime summary; not source evidence]\n"
+        if limit <= len(prefix):
+            return None
+        newest = self._newest_observation_index(groups) if groups else -1
+        priority_indices = (
+            [index for index in range(newest + 1, len(groups))
+             if self._is_control_group(groups[index])]
+            + ([newest] if newest >= 0 else [])
+        )
+        kept_indices: set[int] = set()
+        remaining = limit
+        for index in priority_indices:
+            cost = self._group_cost(groups[index])
+            if cost + len(prefix) < remaining:
+                kept_indices.add(index)
+                remaining -= cost
+        latest_pair = history[-2:] if len(history) >= 2 else []
+        pair_cost = sum(self._message_cost(message) for message in latest_pair)
+        keep_pair = bool(latest_pair) and pair_cost + len(prefix) < remaining
+        if keep_pair:
+            remaining -= pair_cost
+        while True:
+            source_groups = [group for index, group in enumerate(groups)
+                             if index not in kept_indices]
+            source_history = history[:-2] if keep_pair else history
+            source = {
+                "conversation": source_history,
+                "observations": [
+                    [{key: value for key, value in message.items() if not key.startswith("_")}
+                     for message in group]
+                    for group in source_groups
+                ],
+            }
+            available = remaining - len(prefix)
+            if available <= 0:
+                return None
+            history_keys = tuple(fingerprint(message) for message in source_history)
+            observation_keys = tuple(fingerprint(group) for group in source["observations"])
+            cached = summary_cache or {}
+            cached_history = cached.get("history_keys")
+            cached_observations = cached.get("observation_keys")
+            cached_summary = cached.get("summary")
+            valid_cache = (
+                cached.get("workspace_revision") == workspace_revision
+                and isinstance(cached_history, tuple)
+                and isinstance(cached_observations, tuple)
+                and isinstance(cached_summary, str)
+                and bool(cached_summary)
+            )
+            try:
+                if (valid_cache and history_keys == cached_history
+                        and observation_keys == cached_observations
+                        and len(cached_summary) <= available):
+                    summary = cached_summary
+                else:
+                    if (valid_cache and len(cached_history) <= len(history_keys)
+                            and len(cached_observations) <= len(observation_keys)
+                            and history_keys[:len(cached_history)] == cached_history
+                            and observation_keys[:len(cached_observations)] == cached_observations
+                            and (len(cached_history) < len(history_keys)
+                                 or len(cached_observations) < len(observation_keys))):
+                        source = {
+                            "previous_summary": cached_summary,
+                            "new_conversation": source_history[len(cached_history):],
+                            "new_observations": source["observations"][len(cached_observations):],
+                        }
+                    summary = compress_segment(
+                        ContextSegment(json.dumps(source, ensure_ascii=False), "prior working set"),
+                        available,
+                    )
+                if not isinstance(summary, str) or not summary or len(summary) > available:
+                    raise ContextSummaryTooLongError("Model context compression did not fit prior working set")
+                if summary_cache is not None:
+                    summary_cache.clear()
+                    summary_cache.update({
+                        "workspace_revision": workspace_revision,
+                        "history_keys": history_keys,
+                        "observation_keys": observation_keys,
+                        "summary": summary,
+                    })
+                break
+            except ContextSummaryTooLongError:
+                if keep_pair:
+                    keep_pair = False
+                    remaining += pair_cost
+                elif kept_indices:
+                    released = newest if newest in kept_indices else max(kept_indices)
+                    kept_indices.remove(released)
+                    remaining += self._group_cost(groups[released])
+                else:
+                    raise
+        kept_observations = [message for index, group in enumerate(groups)
+                             if index in kept_indices for message in group]
+        kept_history = list(latest_pair) if keep_pair else []
+        return (
+            kept_observations,
+            kept_history,
+            {"role": "user", "content": prefix + summary},
+            len(source_groups),
+            len(source_history),
+        )
 
     @staticmethod
     def _message_cost(message: dict[str, object]) -> int:
@@ -437,12 +571,7 @@ class ContextPackager:
                 continue
             truncated = True
             if compress_segment is not None and segment.compressible and not segment.required:
-                try:
-                    compressed = compress_segment(segment, available)
-                except Exception as error:
-                    raise ContextBudgetExceededError(
-                        f"Model context compression failed for {segment.label}"
-                    ) from error
+                compressed = compress_segment(segment, available)
                 if not isinstance(compressed, str) or not compressed or len(compressed) > available:
                     raise ContextBudgetExceededError(
                         f"Model context compression did not fit {segment.label}"

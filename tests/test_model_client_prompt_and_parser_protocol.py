@@ -687,6 +687,47 @@ def test_model_client_compresses_large_current_context_before_main_request(monke
     assert any(event.name == "context.compressed" for event in logger.events)
 
 
+def test_model_client_reuses_identical_optional_summary_within_run(monkeypatch):
+    client = OpenAICompatibleModelClient(
+        base_url="http://127.0.0.1:3000", context_budget_chars=12_000,
+    )
+    session = SessionContext(UserRequest("review", "/repo"))
+    session.explicit_context = [ExplicitContextItem("big.txt", "big.txt", "file", "A" * 20_000)]
+    summary_requests = []
+
+    def respond(_url, payload, **_kwargs):
+        if "Summarize optional runtime context" in payload["messages"][0]["content"]:
+            summary_requests.append(payload)
+            return {"choices": [{"message": {"content": "short relevant summary"}}]}
+        return {"choices": [{"message": {"content": '{"message":"done","done":true,"actions":[]}'}}]}
+
+    monkeypatch.setattr(client, "_post_json", respond)
+    client.respond(session)
+    first_count = len(summary_requests)
+    assert first_count > 0
+    client.respond(session)
+    assert len(summary_requests) == first_count
+
+
+def test_optional_summary_cache_respects_smaller_targets_and_run_boundary(monkeypatch):
+    client = OpenAICompatibleModelClient(base_url="http://127.0.0.1:3000")
+    segment = ContextSegment("A" * 200, "workspace context")
+    requests = []
+
+    def summarize(_content, _label, limit, _session):
+        requests.append(limit)
+        return "S" * min(40, limit)
+
+    monkeypatch.setattr(client, "_request_context_summary", summarize)
+    first_run = SessionContext(UserRequest("review", "/repo"))
+    assert len(client._compress_context_segment(segment, 50, first_run)) == 40
+    assert len(client._compress_context_segment(segment, 10, first_run)) == 10
+    assert len(client._compress_context_segment(segment, 10, first_run)) == 10
+    second_run = SessionContext(UserRequest("review", "/repo"))
+    client._compress_context_segment(segment, 50, second_run)
+    assert requests == [50, 10, 50]
+
+
 def test_context_compression_stops_before_next_request_after_cancellation(monkeypatch):
     import threading
 

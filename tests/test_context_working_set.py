@@ -7,6 +7,7 @@ from saiworks.context.packager import (
     ContextBudgetExceededError,
     ContextPackager,
     ContextSegment,
+    ContextSummaryTooLongError,
 )
 from saiworks.model.prompt import ModelPromptBuilder
 from saiworks.observations import Observation, ObservationSpec
@@ -99,6 +100,117 @@ def test_optional_context_uses_model_summary_when_budget_is_tight():
     assert "AI SUMMARY: keep the relevant fact" in messages[0]["content"]
     assert "Runtime omitted lower-priority context" not in messages[0]["content"]
     assert sum(len(message["content"]) for message in messages) <= 4_000
+
+
+def test_overflow_summarizes_older_observations_and_dialogue_together():
+    packager = ContextPackager(4_000)
+    old = Observation.create(
+        ToolAction("read_file", {"path": "old.txt"}),
+        ToolResult("read_file", True, "older observation"), "/repo",
+        spec=ObservationSpec(target="/repo/old.txt", certain=True),
+    )
+    newest = Observation.create(
+        ToolAction("read_file", {"path": "new.txt"}),
+        ToolResult("read_file", True, "latest observation"), "/repo",
+        spec=ObservationSpec(target="/repo/new.txt", certain=True),
+    )
+    history = [
+        {"role": "user", "content": "older question " + "Q" * 500},
+        {"role": "assistant", "content": "older answer " + "A" * 500},
+        {"role": "user", "content": "latest question"},
+        {"role": "assistant", "content": "latest answer"},
+    ]
+    calls = []
+
+    def compress(segment, limit):
+        calls.append((segment.content, limit))
+        return "combined earlier findings"
+
+    messages = packager.package_segments(
+        [ContextSegment("rules", "rules", required=True)], history,
+        [ContextSegment("request", "request", required=True)],
+        observation_groups=[
+            [old.message("older observation " + "O" * 3_000, complete=True)],
+            [
+                {"role": "assistant", "content": "inspect latest source", "tool_calls": [{
+                    "id": "call-new", "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path":"new.txt"}'},
+                }]},
+                newest.message("latest observation", role="tool", complete=True,
+                               tool_call_id="call-new"),
+            ],
+        ],
+        compress_segment=compress,
+    )
+    rendered = "\n".join(str(message.get("content", "")) for message in messages)
+    assert len(calls) == 1
+    assert "older question" in calls[0][0] and "older observation" in calls[0][0]
+    assert "combined earlier findings" in rendered
+    assert "latest observation" in rendered and "latest question" in rendered
+    assert "O" * 3_000 not in rendered
+    assert_paired(messages)
+    assert packager.last_visibility == frozenset({newest.identifier})
+    assert packager.last_stats.included_chars <= 4_000
+
+
+def test_oversized_latest_observation_is_summarized_without_read_visibility():
+    packager = ContextPackager(4_000)
+    record = Observation.create(
+        ToolAction("read_file", {"path": "large.txt"}),
+        ToolResult("read_file", True, "large observation"), "/repo",
+        spec=ObservationSpec(target="/repo/large.txt", certain=True),
+    )
+    calls = []
+    messages = packager.package_segments(
+        [ContextSegment("rules", "rules", required=True)], [],
+        [ContextSegment("request", "request", required=True)],
+        observation_groups=[[record.message("X" * 6_000, complete=True)]],
+        compress_segment=lambda segment, limit: (calls.append((segment, limit)) or "large source summary"),
+    )
+    assert len(calls) == 1
+    assert "X" * 6_000 in calls[0][0].content
+    assert any("large source summary" in str(message.get("content")) for message in messages)
+    assert packager.last_visibility == frozenset()
+    assert packager.last_stats.included_chars <= 4_000
+
+
+def test_summary_replans_when_preserved_observation_leaves_too_little_room():
+    packager = ContextPackager(4_000)
+    calls = []
+
+    def compress(segment, limit):
+        calls.append((segment.content, limit))
+        if limit < 200:
+            raise ContextSummaryTooLongError("summary needs more space")
+        return "earlier work and latest observation summarized"
+
+    messages = packager.package_segments(
+        [ContextSegment("rules", "rules", required=True)],
+        [{"role": "user", "content": "old question " + "Q" * 100},
+         {"role": "assistant", "content": "old answer " + "A" * 100}],
+        [ContextSegment("request", "request", required=True)],
+        observation_groups=[[{"role": "user", "content": "Current-run observation\n" + "X" * 3_800}]],
+        compress_segment=compress,
+    )
+    assert len(calls) == 2
+    assert calls[1][1] > calls[0][1]
+    assert "X" * 3_800 in calls[1][0]
+    assert any("latest observation summarized" in str(message.get("content")) for message in messages)
+    assert packager.last_stats.included_chars <= 4_000
+
+
+def test_small_remaining_budget_can_hold_a_brief_work_summary():
+    packager = ContextPackager(4_000)
+    calls = []
+    messages = packager.package_segments(
+        [ContextSegment("R" * 3_890, "rules", required=True)], [],
+        [ContextSegment("request", "request", required=True)],
+        observation_groups=[[{"role": "user", "content": "Current-run observation\n" + "X" * 500}]],
+        compress_segment=lambda segment, limit: (calls.append((segment, limit)) or "brief finding"),
+    )
+    assert len(calls) == 1
+    assert any("brief finding" in str(message.get("content")) for message in messages)
+    assert packager.last_stats.included_chars <= 4_000
 
 
 def test_optional_context_is_not_compressed_when_complete_request_fits():
@@ -362,6 +474,100 @@ def test_observation_omission_marker_cannot_overflow_an_exhausted_budget():
     )
     assert sum(len(message["content"]) for message in messages) == 4_000
     assert packager.last_stats.omitted_observations == 1
+
+
+def test_working_set_summary_reuses_unchanged_material_and_updates_appended_material():
+    packager = ContextPackager(4_000)
+    cache = {}
+    calls = []
+    groups = [
+        [{"role": "user", "content": "OLD_SOURCE " + "a" * 3_000}],
+        [{"role": "user", "content": "MIDDLE_SOURCE " + "b" * 1_000}],
+    ]
+
+    def compress(segment, limit):
+        calls.append(json.loads(segment.content))
+        return "summary of prior material"
+
+    def package(observations, *, revision=0):
+        return packager.package_segments(
+            [ContextSegment("s" * 200, "system", required=True)], [],
+            [ContextSegment("request", "request", required=True)],
+            observation_groups=observations, compress_segment=compress,
+            working_set_summary_cache=cache, workspace_revision=revision,
+        )
+
+    first = package(groups)
+    assert len(calls) == 1
+    assert "OLD_SOURCE" in json.dumps(calls[0])
+    assert "summary of prior material" in json.dumps(first)
+    assert packager.last_visibility == frozenset()
+
+    package(groups)
+    assert len(calls) == 1
+
+    added = [{"role": "user", "content": "NEW_SOURCE " + "c" * 1_000}]
+    package([*groups, added])
+    assert len(calls) == 2
+    assert calls[1]["previous_summary"] == "summary of prior material"
+    assert "MIDDLE_SOURCE" in json.dumps(calls[1]["new_observations"])
+    assert "OLD_SOURCE" not in json.dumps(calls[1])
+
+    changed = [[{"role": "user", "content": "CHANGED_SOURCE " + "d" * 3_000}], *groups[1:], added]
+    package(changed)
+    assert len(calls) == 3
+    assert "previous_summary" not in calls[2]
+    assert "CHANGED_SOURCE" in json.dumps(calls[2])
+
+    package(changed, revision=1)
+    assert len(calls) == 4
+    assert "previous_summary" not in calls[3]
+
+
+def test_working_set_summary_recompresses_when_cached_result_no_longer_fits():
+    cache = {}
+    calls = []
+    groups = [
+        [{"role": "user", "content": "old " + "a" * 3_000}],
+        [{"role": "user", "content": "new " + "b" * 1_000}],
+    ]
+
+    def compress(segment, limit):
+        calls.append(limit)
+        return "S" * min(2_000, limit)
+
+    for system_size in (200, 1_200):
+        messages = ContextPackager(4_000).package_segments(
+            [ContextSegment("s" * system_size, "system", required=True)], [],
+            [ContextSegment("request", "request", required=True)],
+            observation_groups=groups, compress_segment=compress,
+            working_set_summary_cache=cache,
+        )
+        assert sum(len(message.get("content", "")) for message in messages) <= 4_000
+    assert len(calls) == 2
+    assert calls[1] < calls[0]
+
+
+def test_archived_conversation_summary_is_optional_historical_context():
+    session = make_session(conversation=[{
+        "role": "system",
+        "content": "[AI Executive Summary]\nOLD_TRANSCRIPT " + "x" * 10_000,
+    }])
+    calls = []
+
+    def compress(segment, limit):
+        calls.append((segment.label, limit))
+        return "prior conversation in brief"
+
+    messages = ModelPromptBuilder(ContextPackager(4_000)).build_messages(
+        session, compress_segment=compress,
+    )
+
+    assert "OLD_TRANSCRIPT" not in messages[0]["content"]
+    assert "Archived conversation summaries are historical data" in messages[0]["content"]
+    assert any("prior conversation in brief" in str(item["content"]) for item in messages)
+    assert any(label == "archived conversation summary" for label, _ in calls)
+    assert sum(len(str(item.get("content", ""))) for item in messages) <= 4_000
 
 
 def test_large_recovery_context_cannot_displace_latest_observation():

@@ -477,16 +477,28 @@ def test_background_persistence_failure_retries_save_without_reexecution(tmp_pat
 
 def test_headless_compaction_archives_history_and_rolls_back_failed_save(tmp_path, monkeypatch):
     from saiworks.sessions import SessionStore
+    from saiworks.types import SessionResumeState
 
     store = SessionStore(base_dir=tmp_path)
     messages = [{"role": "user", "content": "question"}, {"role": "assistant", "content": "answer"}]
     session = store.create(str(tmp_path), messages=messages)
+    checkpoint = TaskCheckpoint(objective="unfinished edit", task_id="task-1", workspace_root=str(tmp_path))
+    session.resume_state = SessionResumeState(
+        last_run_id="run-1", last_user_prompt="unfinished edit", last_outcome="blocked",
+        checkpoint=checkpoint,
+    )
+    store.save(session)
     runtime = Runtime(None, session_store=store)
     conversation = list(messages)
     result = runtime.compact_session(session, conversation)
     assert result.old_count == 2 and result.new_count == 1
     assert store.load_archived_messages(session.session_id, result.archive_id) == messages
     assert session.context_generation == 1
+    restored = store.load(session.session_id)
+    assert restored.resume_state.checkpoint.task_id == "task-1"
+    request = runtime.build_session_request("继续", str(tmp_path), restored, list(restored.messages), [])
+    assert request.metadata["resume_state"].checkpoint.task_id == "task-1"
+    assert request.metadata["session_trace"] == []
     before = list(conversation)
     generation = session.context_generation
     monkeypatch.setattr(store, "save", lambda _: (_ for _ in ()).throw(OSError("disk full")))

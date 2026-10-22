@@ -418,18 +418,6 @@ class SessionCoordinator:
                 session_trace = []
             session_trace = session_trace[-6:]
             resume_state = getattr(session, "resume_state", None)
-            if getattr(session, "context_generation", 0) > 0:
-                if not trace_anchor:
-                    resume_state = None
-                else:
-                    trace_ids = [getattr(item, "run_id", "") for item in session.trace]
-                    anchor_index = next(
-                        (index for index, run_id in enumerate(trace_ids) if run_id == trace_anchor),
-                        None,
-                    )
-                    resume_run_id = getattr(resume_state, "last_run_id", "")
-                    if anchor_index is None or resume_run_id in trace_ids[: anchor_index + 1]:
-                        resume_state = None
 
         return UserRequest(
             prompt=prompt,

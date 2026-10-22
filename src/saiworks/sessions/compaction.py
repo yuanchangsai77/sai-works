@@ -2,8 +2,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..types import SessionResumeState
-
 
 @dataclass(frozen=True, slots=True)
 class CompactionResult:
@@ -30,7 +28,6 @@ def compact(store, session, conversation, model) -> CompactionResult:
             session.compaction_archive_ids.append(archive_id)
             session.context_generation += 1
             session.context_trace_after_run_id = session.trace[-1].run_id if session.trace else ""
-            session.resume_state = SessionResumeState()
             store.save(session)
         except BaseException:
             (session.messages, session.compaction_archive_ids, session.context_generation,

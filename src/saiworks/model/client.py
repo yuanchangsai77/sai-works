@@ -11,7 +11,8 @@ from codecs import getincrementaldecoder
 from collections.abc import Callable, Iterator
 from uuid import uuid4
 
-from ..context.packager import ContextPackager, ContextSegment
+from ..context.packager import ContextPackager, ContextSegment, ContextSummaryTooLongError
+from ..observations import fingerprint
 from ..orchestration.session import SessionContext
 from ..types import ModelReply, ToolAction
 from . import types as model_types
@@ -106,6 +107,11 @@ class OpenAICompatibleModelClient:
     ) -> str:
         if limit <= 0:
             raise RuntimeError("no room remains for a context summary")
+        cache = session.context_segment_summary_cache if session is not None else None
+        cache_key = (segment.label, fingerprint(segment.content))
+        cached = cache.get(cache_key) if cache is not None else None
+        if cached and len(cached) <= limit:
+            return cached
         input_limit = max(512, min(24_000, self.capability_profile.context_budget_chars // 2))
         intermediate_limit = min(2_000, max(160, input_limit // 3))
         content = segment.content
@@ -116,13 +122,15 @@ class OpenAICompatibleModelClient:
                     content = self._request_context_summary(content, segment.label, limit, session)
                     requests += 1
                     if len(content) <= limit:
+                        if cache is not None:
+                            cache[cache_key] = content
                         if self.logger is not None:
                             self.logger.record("context.compressed", {
                                 "label": segment.label, "original_chars": len(segment.content),
                                 "summary_chars": len(content), "model_requests": requests,
                             })
                         return content
-                raise RuntimeError("model summary exceeded the available context space")
+                raise ContextSummaryTooLongError("model summary exceeded the available context space")
             parts = [content[index:index + input_limit]
                      for index in range(0, len(content), input_limit)]
             summaries = [self._request_context_summary(part, segment.label, intermediate_limit, session)

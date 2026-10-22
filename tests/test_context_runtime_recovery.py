@@ -1,6 +1,6 @@
 import pytest
 
-from saiworks.model.types import ModelTimeoutError
+from saiworks.model.types import ModelConnectionError, ModelTimeoutError
 from saiworks.observability.logger import InMemoryLogger
 from saiworks.orchestration.engine import ExecutionEngine
 from saiworks.safety.guardrails import Guardrails
@@ -106,6 +106,22 @@ def test_transport_timeout_still_consumes_execution_budget(tmp_path, monkeypatch
     assert summary.checkpoint.runtime_state["model_attempts"] == "1"
 
 
+def test_explicit_run_limit_applies_when_final_reply_arrives_late(tmp_path, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr("saiworks.orchestration.engine.time.monotonic", lambda: clock[0])
+
+    class Model:
+        def respond(self, _session):
+            clock[0] += 3
+            return ModelReply("done", done=True)
+
+    summary = engine(Model(), InMemoryLogger(), max_run_seconds=2).execute(
+        UserRequest("review", str(tmp_path))
+    )
+    assert summary.outcome == "exhausted"
+    assert summary.blockers[0].error_code == "run_time_budget_exhausted"
+
+
 def test_default_run_has_no_wall_clock_limit(tmp_path, monkeypatch):
     (tmp_path / "design.md").write_text("finding\n")
     clock = [0.0]
@@ -192,6 +208,76 @@ def test_successful_context_summary_counts_primary_request_once(tmp_path, monkey
     assert summary.outcome == "completed"
     assert int(summary.checkpoint.runtime_state["model_attempts"]) == len(requests)
     assert sum(event.name == "model.request" for event in logger.events) == 1
+
+
+def test_context_summary_connection_failure_uses_model_retry(tmp_path, monkeypatch):
+    from saiworks.context import ExplicitContextItem
+    from saiworks.model.client import OpenAICompatibleModelClient
+    from saiworks.tools.registry import ToolRegistry
+
+    class LargeContext:
+        def load_context(self, _request, session):
+            session.explicit_context = [ExplicitContextItem("large.txt", "large.txt", "file", "X" * 20_000)]
+
+    logger = InMemoryLogger()
+    client = OpenAICompatibleModelClient(
+        base_url="http://127.0.0.1:3000", logger=logger, context_budget_chars=12_000,
+    )
+    requests = []
+
+    def respond(_url, payload, **_kwargs):
+        requests.append(payload)
+        if len(requests) == 1:
+            raise ModelConnectionError("temporary connection loss")
+        content = ("summary" if "Summarize optional runtime context" in payload["messages"][0]["content"]
+                   else '{"message":"done","done":true,"actions":[]}')
+        return {"choices": [{"message": {"content": content}}]}
+
+    monkeypatch.setattr(client, "_post_json", respond)
+    runtime = ExecutionEngine(
+        model=client, logger=logger, tools=ToolRegistry(logger),
+        guardrails=Guardrails(DefaultPolicy(mode="auto"), logger),
+        context_loaders=[LargeContext()], max_model_retries=1, model_retry_delays=(0,),
+    )
+    summary = runtime.execute(UserRequest("review", str(tmp_path)))
+    assert summary.outcome == "completed"
+    assert len([event for event in logger.events if event.name == "model.retry"]) == 1
+    assert int(summary.checkpoint.runtime_state["model_attempts"]) == len(requests)
+
+
+def test_explicit_run_limit_stops_between_summary_requests(tmp_path, monkeypatch):
+    from saiworks.context import ExplicitContextItem
+    from saiworks.model.client import OpenAICompatibleModelClient
+    from saiworks.tools.registry import ToolRegistry
+
+    clock = [0.0]
+    monkeypatch.setattr("saiworks.orchestration.engine.time.monotonic", lambda: clock[0])
+
+    class LargeContext:
+        def load_context(self, _request, session):
+            session.explicit_context = [ExplicitContextItem("large.txt", "large.txt", "file", "X" * 20_000)]
+
+    logger = InMemoryLogger()
+    client = OpenAICompatibleModelClient(
+        base_url="http://127.0.0.1:3000", logger=logger, context_budget_chars=12_000,
+    )
+    requests = []
+
+    def respond(_url, payload, **_kwargs):
+        requests.append(payload)
+        clock[0] += 2
+        return {"choices": [{"message": {"content": "summary"}}]}
+
+    monkeypatch.setattr(client, "_post_json", respond)
+    runtime = ExecutionEngine(
+        model=client, logger=logger, tools=ToolRegistry(logger),
+        guardrails=Guardrails(DefaultPolicy(mode="auto"), logger),
+        context_loaders=[LargeContext()], max_run_seconds=1,
+    )
+    summary = runtime.execute(UserRequest("review", str(tmp_path)))
+    assert summary.outcome == "exhausted"
+    assert summary.blockers[0].error_code == "run_time_budget_exhausted"
+    assert len(requests) == 1
 
 
 @pytest.mark.parametrize("tool,argument,conditions", [

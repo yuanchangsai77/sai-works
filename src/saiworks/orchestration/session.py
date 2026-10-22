@@ -35,6 +35,8 @@ class SessionContext:
     recovered_observations: list[Observation] = field(default_factory=list)
     visible_observations: frozenset[str] | None = None
     visible_observation_views: list[dict[str, object]] | None = None
+    working_set_summary_cache: dict[str, object] = field(default_factory=dict)
+    context_segment_summary_cache: dict[tuple[str, str], str] = field(default_factory=dict)
     tool_results: list[ToolResult] = field(default_factory=list)
     active_instructions: list[InstructionContent] = field(default_factory=list)
     project_rules: list[ProjectRule] = field(default_factory=list)
