@@ -1,32 +1,40 @@
 import json
+from concurrent.futures import ThreadPoolExecutor
+from threading import Event
 
 import pytest
 
 from saiworks.app import create_app
 from saiworks.interaction.cli import CLI
 from saiworks.interaction.presenter import ConsolePresenter
-from saiworks.model.types import ModelConnectionError, ModelProtocolError, ModelTimeoutError
 from saiworks.model.streaming import NaturalLanguageDelta
+from saiworks.model.types import (
+    ModelConnectionError,
+    ModelProtocolError,
+    ModelTimeoutError,
+)
 from saiworks.observability.logger import InMemoryLogger
-from saiworks.orchestration.engine import ExecutionEngine
+from saiworks.orchestration.engine import ExecutionContext, ExecutionEngine
 from saiworks.orchestration.failures import runtime_failure_message
 from saiworks.orchestration.session import SessionContext
 from saiworks.safety.guardrails import Guardrails
 from saiworks.safety.policy import DefaultPolicy
 from saiworks.sessions import SessionStore
+from saiworks.tools.base import SimpleTool
 from saiworks.tools.builtin_provider import build_builtin_registry
+from saiworks.tools.registry import ToolRegistry
 from saiworks.types import (
     EvidenceRecord,
     ExecutionSummary,
     ModelReply,
-    SessionRunTrace,
+    RuntimeBlocker,
     SessionResumeState,
+    SessionRunTrace,
     SessionTurnTrace,
+    TaskCheckpoint,
     ToolAction,
     ToolDefinition,
     ToolResult,
-    RuntimeBlocker,
-    TaskCheckpoint,
     UserRequest,
 )
 
@@ -78,6 +86,68 @@ def test_task_checkpoint_migrates_legacy_phase_names():
     assert blocked.phase == "in_progress"
     with pytest.raises(ValueError, match="Invalid task state transition"):
         TaskCheckpoint().transition_to("done")
+
+
+def test_reused_task_context_gets_distinct_run_state_and_terminal_result(tmp_path):
+    class Model:
+        def respond(self, session):
+            return ModelReply(message=session.request.prompt, done=True)
+
+    logger = InMemoryLogger()
+    engine = ExecutionEngine(
+        model=Model(),
+        tools=build_builtin_registry(logger),
+        guardrails=Guardrails(policy=DefaultPolicy(mode="auto"), logger=logger),
+        logger=logger,
+    )
+    context = ExecutionContext(task_id="same-task")
+    cancellation = context.cancellation
+
+    first = engine.execute_in_context(UserRequest("first", str(tmp_path)), context)
+    first_run_state = engine._run_state
+    second = engine.execute_in_context(UserRequest("second", str(tmp_path)), context)
+
+    assert first.final_message == "first"
+    assert second.final_message == "second"
+    assert second is not first
+    assert engine._run_state is not first_run_state
+    assert context.cancellation is cancellation
+    assert context.terminal_summary is second
+
+
+def test_cancel_during_tool_execution_keeps_result_and_interrupts_run(tmp_path):
+    started, release = Event(), Event()
+
+    def slow_read(_action, _context):
+        started.set()
+        assert release.wait(3)
+        return ToolResult("slow_read", True, "observed")
+
+    class Model:
+        def respond(self, _session):
+            return ModelReply("finished", actions=[ToolAction("slow_read")], done=True)
+
+    logger = InMemoryLogger()
+    tools = ToolRegistry(logger)
+    tools.register(SimpleTool("slow_read", "read", {}, slow_read))
+    engine = ExecutionEngine(
+        model=Model(), tools=tools,
+        guardrails=Guardrails(policy=DefaultPolicy(mode="auto"), logger=logger),
+        logger=logger,
+    )
+
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        future = pool.submit(engine.execute, UserRequest("inspect", str(tmp_path)))
+        assert started.wait(3)
+        engine.cancel_current_run()
+        release.set()
+        with pytest.raises(KeyboardInterrupt):
+            future.result(timeout=3)
+
+    summary = engine.last_failure_summary
+    assert summary.outcome == "interrupted"
+    assert [result.output for result in summary.tool_results] == ["observed"]
+    assert engine._finish(ExecutionSummary("late completion", [])).outcome == "interrupted"
 
 
 def test_engine_routes_only_model_natural_language_stream_to_progress_reporter(tmp_path):

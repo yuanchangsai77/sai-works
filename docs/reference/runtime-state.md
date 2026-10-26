@@ -1,6 +1,6 @@
 # 当前运行状态参考
 
-状态：源码类型与现有行为参考，核对于 2026-09-30。这里记录已存在的内部字段，不定义新的对外 API 或持久化版本。
+状态：源码类型与现有行为参考，核对于 2026-10-23。这里记录已存在的内部字段，不定义新的对外 API 或持久化版本。
 
 ## 请求、结果与终态
 
@@ -12,6 +12,8 @@
 | WorkspaceSessionState | origin_root、active_root、approved_roots | 会话路径授权与活动环境投影 |
 
 TaskStatus 与 Run outcome 是不同层级。任务状态为 pending、in_progress、blocked、verified、done；引擎运行终态包括 completed、blocked、stalled、runtime_error、interrupted、exhausted。不能把所有非异常返回解释为完成。
+
+同进程运行中断信号若在工具执行期间到达，工具返回的结果仍先记录到观察和检查点，Run 随后以 `interrupted` 收尾。此前该时序可能以 `completed` 收尾；本次使用已有 outcome 值修正了这一可见语义，CLI/TUI/Desktop 或其他结果消费者应按 `interrupted` 展示，不把工具成功等同于 Run 完成。按 Task 持久化的取消接受点仍未自动触发此内存中断路径。
 
 独立 Runtime 接受记录的 queued/running/cancelled/finished 不替代上述状态；接受事务与提交重试见[持久化接受参考](runtime-acceptance.md)。
 

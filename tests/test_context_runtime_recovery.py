@@ -39,6 +39,39 @@ def test_analysis_loop_with_varied_read_parameters_gets_recovery_then_stops_or_f
     assert (tmp_path / "design.md").read_text() == "one design finding\n"
 
 
+@pytest.mark.parametrize("invisible", [True, False])
+def test_read_cache_validation_short_circuits_for_invisible_observations(tmp_path, monkeypatch, invisible):
+    (tmp_path / "design.md").write_text("one design finding\n")
+
+    class Model:
+        calls = 0
+
+        def respond(self, session):
+            self.calls += 1
+            if self.calls == 3:
+                return ModelReply("Finished reviewing the design finding.", done=True)
+            if self.calls == 2 and invisible:
+                session.visible_observations = set()
+            return ModelReply("inspect", actions=[ToolAction("read_file", {"path": "design.md"})])
+
+    logger = InMemoryLogger()
+    runtime = engine(Model(), logger)
+    validations = []
+    cached_result_valid = runtime.tools.cached_result_valid
+
+    def validate(**kwargs):
+        validations.append(kwargs)
+        return cached_result_valid(**kwargs)
+
+    monkeypatch.setattr(runtime.tools, "cached_result_valid", validate)
+    summary = runtime.execute(UserRequest("review", str(tmp_path)))
+
+    assert summary.outcome == "completed"
+    assert len(validations) == (0 if invisible else 1)
+    assert len(summary.tool_results) == 2
+    assert bool(summary.tool_results[1].metadata.get("duplicate")) is not invisible
+
+
 def test_successful_execute_does_not_erase_semantic_read_loop_detection(tmp_path):
     (tmp_path / "design.md").write_text("same finding\n")
 
@@ -88,6 +121,24 @@ def test_approval_wait_does_not_consume_execution_budget_and_resets_per_run(tmp_
         assert runtime._execution_context.approval_wait_seconds == 1_200
     approvals = [event for event in logger.events if event.name == "safety.approval"]
     assert all(event.payload["wait_seconds"] == 1_200 for event in approvals)
+
+
+def test_context_loading_precedes_execution_time_budget(tmp_path, monkeypatch):
+    clock = [0.0]
+    monkeypatch.setattr("saiworks.orchestration.engine.time.monotonic", lambda: clock[0])
+
+    class SlowContext:
+        def load_context(self, _request, _session):
+            clock[0] += 3
+
+    class Model:
+        def respond(self, _session):
+            return ModelReply("done", done=True)
+
+    summary = engine(Model(), InMemoryLogger(), context_loaders=[SlowContext()], max_run_seconds=2).execute(
+        UserRequest("review", str(tmp_path))
+    )
+    assert summary.outcome == "completed"
 
 
 def test_transport_timeout_still_consumes_execution_budget(tmp_path, monkeypatch):
