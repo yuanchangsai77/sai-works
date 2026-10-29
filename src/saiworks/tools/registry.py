@@ -20,6 +20,7 @@ class ToolRegistry:
         self._logger = logger
         self._state = {}
         self._persistent_state_names: set[str] = set()
+        self._cleanup_completed: set[str] = set()
         self._providers = []
         self._provider_tool_owners: dict[str, int] = {}
         self._max_output_bytes = max(1, int(max_output_bytes))
@@ -52,6 +53,7 @@ class ToolRegistry:
 
     def attach_state(self, name: str, value, *, persistent: bool = False) -> None:
         self._state[name] = value
+        self._cleanup_completed.discard(name)
         if persistent:
             self._persistent_state_names.add(name)
 
@@ -88,15 +90,24 @@ class ToolRegistry:
                 self._provider_tool_owners[name] = provider_id
 
     def reset_state(self) -> None:
-        for value in self._state.values():
-            close = getattr(value, "close", None)
-            if callable(close):
-                close()
-        self._state = {
-            name: value
-            for name, value in self._state.items()
-            if name in self._persistent_state_names
-        }
+        errors = []
+        for name, value in tuple(self._state.items()):
+            if name in self._cleanup_completed:
+                continue
+            try:
+                close = getattr(value, "close", None)
+                if callable(close):
+                    close()
+            except Exception as error:
+                errors.append(error)
+                continue
+            if name in self._persistent_state_names:
+                self._cleanup_completed.add(name)
+            else:
+                self._state.pop(name, None)
+        if errors:
+            raise ExceptionGroup("Tool state cleanup failed", errors)
+        self._cleanup_completed.clear()
 
     def definitions(self) -> list[ToolDefinition]:
         self.refresh_providers()

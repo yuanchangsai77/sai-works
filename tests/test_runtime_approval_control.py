@@ -242,8 +242,8 @@ def test_upgrade_v2_database_and_reject_unknown_versions(tmp_path):
         arguments={}, workspace_root=str(tmp_path), required_scope="write", ttl_seconds=30)
     assert approval.state == "pending"
     with sqlite3.connect(path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 3
-        connection.execute("PRAGMA user_version=4")
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        connection.execute("PRAGMA user_version=6")
     with pytest.raises(ValueError, match="database version"):
         TaskStore(path)
 

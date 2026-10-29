@@ -23,13 +23,14 @@ def record_synthetic_tool_result(logger, result: ToolResult) -> None:
 class ResultRecorder:
     """Project one result into the run session without duplicating real tool logs."""
 
-    def __init__(self, engine, session: SessionContext) -> None:
-        self.engine = engine
+    def __init__(self, logger, session: SessionContext, refresh_workspace) -> None:
+        self.logger = logger
         self.session = session
+        self.refresh_workspace = refresh_workspace
 
     def record(self, result: ToolResult, *, synthetic: bool = False, refresh_workspace: bool = False) -> None:
         if synthetic:
-            record_synthetic_tool_result(self.engine.logger, result)
+            record_synthetic_tool_result(self.logger, result)
         self.session.add_tool_result(result)
         if refresh_workspace:
-            self.engine._refresh_task_workspace_context(self.session)
+            self.refresh_workspace(self.session)

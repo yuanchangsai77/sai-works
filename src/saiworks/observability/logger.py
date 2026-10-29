@@ -113,6 +113,17 @@ class InMemoryLogger:
                     "tool-arguments", arguments, inline_limit=2_000
                 ),
             }
+        if name == "action.admitted":
+            arguments = payload.get("arguments", {})
+            return {
+                "action_id": payload.get("action_id", ""),
+                "name": payload.get("name", ""),
+                "workspace": payload.get("workspace", ""),
+                "risk_level": payload.get("risk_level", ""),
+                "arguments_ref": self._artifact_envelope(
+                    "action-arguments", arguments, inline_limit=2_000,
+                ),
+            }
         if name == "tool.result":
             output = str(payload.get("output", ""))
             metadata = payload.get("metadata", {})

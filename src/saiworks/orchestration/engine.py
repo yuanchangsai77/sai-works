@@ -21,7 +21,8 @@ from ..types import (
     UserRequest,
     WorkspaceSessionState,
 )
-from .actions import ActionFlow
+from .action_journal import ActionJournal
+from .actions import ActionEnvironment, ActionFlow
 from .control import CompletionPolicy, RunBudgetPolicy
 from .ext import ContextLoader
 from .failures import runtime_failure_message, runtime_failure_retryability
@@ -51,6 +52,7 @@ class ExecutionContext:
     tools_closed: bool = False
     terminal_summary: ExecutionSummary | None = None
     approval_wait_seconds: float = 0.0
+    action_journal: ActionJournal | None = None
 
 
 class ExecutionEngine:
@@ -144,6 +146,7 @@ class ExecutionEngine:
         self._execution_context = ExecutionContext()
         self._run_state = RunState(started_at=time.monotonic())
         self._execution_lock = threading.Lock()
+        self._tool_cleanup_lock = threading.RLock()
         self.last_failure_summary: ExecutionSummary | None = None
         self.current_session: SessionContext | None = None
 
@@ -199,14 +202,22 @@ class ExecutionEngine:
         self._close_execution_tools()
 
     def _close_execution_tools(self) -> None:
-        context = self._execution_context
-        if self._run_state.tools_closed:
-            return
-        self._run_state.tools_closed = True
-        context.tools_closed = True
-        reset_state = getattr(self.tools, "reset_state", None)
-        if callable(reset_state):
-            reset_state()
+        with self._tool_cleanup_lock:
+            context = self._execution_context
+            if self._run_state.tools_closed:
+                return
+            reset_state = getattr(self.tools, "reset_state", None)
+            try:
+                if callable(reset_state):
+                    reset_state()
+            except Exception as error:
+                try:
+                    self.logger.record("tool.cleanup_failed", {"error": str(error)})
+                except Exception:
+                    pass
+                return
+            self._run_state.tools_closed = True
+            context.tools_closed = True
 
     def _execute(self, request: UserRequest) -> ExecutionSummary:
         runtime_model = getattr(self.model, "model", "")
@@ -266,10 +277,24 @@ class ExecutionEngine:
         session.cancellation = self._execution_context.cancellation
 
         model_turn = ModelTurn(self, session, state)
-        recorder = ResultRecorder(self, session)
+        recorder = ResultRecorder(self.logger, session, self._refresh_task_workspace_context)
         turn_decision = TurnDecision(self, session, state, request_intent, recorder)
+        action_environment = ActionEnvironment(
+            tools=self.tools,
+            guardrails=self.guardrails,
+            logger=self.logger,
+            progress_reporter_provider=lambda: self.progress_reporter,
+            capability_warehouse=self.capability_warehouse,
+            approval_callback_provider=lambda: self.approval_callback,
+            execution_context=self._execution_context,
+            raise_if_cancelled=self._raise_if_cancelled,
+            non_retryable_error_codes=frozenset(self.non_retryable_error_codes),
+            non_resource_control_tools=frozenset(self.non_resource_control_tools),
+            max_duplicate_skips=self.max_duplicate_skips,
+        )
 
         for turn in range(1, self.max_turns + 1):
+            state.turn_count = turn
             self._raise_if_cancelled()
             budget_problem = self._run_budget_problem(
                 state.started_at,
@@ -320,7 +345,8 @@ class ExecutionEngine:
             )
 
             turn_results = ActionFlow(
-                self, request, session, permissions, state, visible_tool_names, recorder,
+                action_environment,
+                request, session, permissions, state, visible_tool_names, recorder,
             ).process(reply.actions)
             self._raise_if_cancelled()
 

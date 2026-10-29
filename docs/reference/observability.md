@@ -16,6 +16,8 @@
 | 大型材料 | `.saiworks/runs/<run_id>/artifacts/` | 首次完整模型请求、工具参数/结果、终态 checkpoint |
 | 会话状态 | `.saiworks/sessions/<session_id>.json` | 消息、run_ids、trace、恢复状态与当前工作区 |
 | 会话简要轨迹 | `.saiworks/sessions/<session_id>.trace.log` | 按会话查看运行摘要 |
+
+引擎在 Run 收尾时额外记录内部 `run.metrics` 事件：轮次数、模型尝试数、真实工具动作数、重复跳过数、无效完成次数，以及模型轮次处理（含重试等待）、工具处理和同步审批等待耗时。耗时按进程内单调时钟累计，仅用于诊断；它不是计费数据，也不进入跨端响应契约。
 | 任务接受记录 | `.saiworks/tasks.sqlite3` | submission、task、接受与最终提交状态 |
 
 `run_id` 当前是 UTC 时间戳，例如本地时间 2026-10-02 01:02 对应目录 `2026-10-01T17-02-42...+00-00`。不要仅凭文件名判断 session 新旧：测试也会创建 session，可靠关联应读取 run 的 `run.start.payload.metadata.session_id`，或读取 session 的 `run_ids`。

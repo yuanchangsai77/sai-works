@@ -1,8 +1,10 @@
 from types import SimpleNamespace
 
 from saiworks.evals.local_coding import (
-    CancelAfterRead, score_case, score_compaction, score_interrupt, summarize_results, write_fixture,
+    CancelAfterRead, latest_run_metrics, score_case, score_compaction, score_interrupt,
+    summarize_results, write_fixture,
 )
+from saiworks.observability.logger import InMemoryLogger
 from saiworks.types import ToolResult
 
 
@@ -104,6 +106,13 @@ def test_repeat_summary_preserves_per_case_denominator():
     assert counts["read_fact"] == {"passed": 1, "total": 2}
     assert counts["approval_denied"] == {"passed": 1, "total": 1}
     assert "fix_boundary" not in counts
+
+
+def test_evaluation_reads_latest_run_metrics():
+    logger = InMemoryLogger()
+    logger.record("run.metrics", {"model_attempts": 2})
+    logger.record("run.finish", {"outcome": "completed"})
+    assert latest_run_metrics(logger) == {"model_attempts": 2}
 
 
 def test_compaction_requires_observed_code_archive_and_continuation(tmp_path):

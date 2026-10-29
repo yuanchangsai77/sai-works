@@ -15,7 +15,7 @@
 
 ## 2. 当前工作：壳与运行协调拆分
 
-文档基线已提交；壳拆分 A 核对完成，B/C 同进程验收完成，具体证据见[阶段核对](design/shell-core-audit.md)。已具备无终端 Runtime、单槽串行、Task 隔离、事务接受、提交去重和统一会话收尾。D1 的[同进程任务观察](reference/runtime-observation.md)已实施；下一步确认并实施 D2 的审批挂起、续跑和按 Task 取消，再迁移各壳。E 常驻与 F Companion 尚未实施。
+文档基线已提交；壳拆分 A 核对完成，B/C 同进程验收完成，具体证据见[阶段核对](design/shell-core-audit.md)。已具备无终端 Runtime、单槽串行、Task 隔离、事务接受、提交去重和统一会话收尾。D1 的[同进程任务观察](reference/runtime-observation.md)已实施；D2 已有按 Task 取消接受、活动 Run 中断桥接和动作启动排序，审批挂起与续跑仍待实施，再迁移各壳。E 常驻与 F Companion 尚未实施。
 
 当前产品主线进入 [Desktop V0.1a](design/desktop-v0.md)：先以同进程单壳验证低门槛交互，同时保持 CLI/TUI 兼容。阶段 D 不再作为启动 Desktop 的整体前置，而是运行中换壳、重连和可恢复审批的解锁条件；阶段 E 在验证脱壳续跑需求后实施。
 

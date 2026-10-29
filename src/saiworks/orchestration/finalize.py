@@ -39,8 +39,22 @@ class RunFinalizer:
             summary.active_instructions = engine.capability_warehouse.persisted_instructions()
             summary.active_capability_ids = engine.capability_warehouse.persisted_capability_ids()
             engine.capability_warehouse.release_scopes({"turn", "run"})
-        if not engine._keep_tool_state:
+        if not engine._keep_tool_state or engine._execution_context.cancellation.is_set():
             engine._close_execution_tools()
         state.terminal_summary = summary
         engine._execution_context.terminal_summary = summary
+        try:
+            engine.logger.record("run.metrics", {
+                "turns": state.turn_count,
+                "model_attempts": state.model_attempts,
+                "real_tool_actions": state.real_tool_actions,
+                "duplicate_skips": state.duplicate_skips,
+                "invalid_completions": state.invalid_completion_count,
+                "model_seconds": round(state.model_seconds, 3),
+                "tool_seconds": round(state.tool_seconds, 3),
+                "approval_wait_seconds": round(state.approval_wait_seconds, 3),
+            })
+        except Exception:
+            # Diagnostics must not replace a committed run outcome.
+            pass
         return summary

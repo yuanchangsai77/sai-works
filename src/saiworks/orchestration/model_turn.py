@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from ..model.types import ModelRetryableError
 from ..types import RuntimeBlocker
 from .run_state import RunState
@@ -52,6 +54,7 @@ class ModelTurn:
                 stream_observer_setter(None)
         reply = None
         budget_problem = None
+        started = time.monotonic()
         try:
             retry_count = 0
             while True:
@@ -116,6 +119,7 @@ class ModelTurn:
                     if engine._execution_context.cancellation.wait(retry_delay):
                         raise KeyboardInterrupt
         finally:
+            state.model_seconds += max(0.0, time.monotonic() - started)
             if callable(stream_observer_setter):
                 stream_observer_setter(None)
             if progress_handle is not None:

@@ -3,7 +3,9 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Iterable
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from ..observations import observation_for
 from ..types import ToolAction, ToolResult, UserRequest
@@ -11,6 +13,31 @@ from .permissions import PermissionContext
 from .results import ResultRecorder
 from .run_state import RunState
 from .session import SessionContext
+
+
+@dataclass(frozen=True, slots=True)
+class ActionEnvironment:
+    """Only the services needed to admit and execute a model action."""
+
+    tools: object
+    guardrails: object
+    logger: object
+    progress_reporter_provider: Callable[[], object]
+    capability_warehouse: object
+    approval_callback_provider: Callable[[], object]
+    execution_context: object
+    raise_if_cancelled: Callable[[], None]
+    non_retryable_error_codes: frozenset[str]
+    non_resource_control_tools: frozenset[str]
+    max_duplicate_skips: int
+
+    @property
+    def progress_reporter(self):
+        return self.progress_reporter_provider()
+
+    @property
+    def approval_callback(self):
+        return self.approval_callback_provider()
 
 
 class ActionFlow:
@@ -22,7 +49,7 @@ class ActionFlow:
 
     def __init__(
         self,
-        engine,
+        environment: ActionEnvironment,
         request: UserRequest,
         session: SessionContext,
         permissions: PermissionContext,
@@ -30,7 +57,7 @@ class ActionFlow:
         visible_names: set[str],
         recorder: ResultRecorder,
     ) -> None:
-        self.engine = engine
+        self.environment = environment
         self.request = request
         self.session = session
         self.permissions = permissions
@@ -41,7 +68,7 @@ class ActionFlow:
 
     def process(self, actions: Iterable[ToolAction]) -> list[ToolResult]:
         for action in actions:
-            self.engine._raise_if_cancelled()
+            self.environment.raise_if_cancelled()
             self._process_one(action)
         return self.results
 
@@ -50,14 +77,14 @@ class ActionFlow:
         self.results.append(result)
 
     def _process_one(self, action: ToolAction) -> None:
-        engine = self.engine
+        services = self.environment
         state = self.state
         cwd = self._task_workspace_root(self.request, self.session)
         if action.name == "workspace_open":
             state.clear_action_cache()
 
         if action.name not in self.visible_names:
-            definition = engine.tools.definition_for(action.name)
+            definition = services.tools.definition_for(action.name)
             result = self._delegated_effect_problem(definition, self.request)
             if result is None:
                 result = ToolResult(
@@ -75,7 +102,7 @@ class ActionFlow:
 
         key = self._action_key(action)
         previous = state.completed_actions.get(key)
-        cache_check = getattr(engine.tools, "cached_result_valid", None)
+        cache_check = getattr(services.tools, "cached_result_valid", None)
         if previous is not None:
             observation = observation_for(previous)
             invisible = (
@@ -93,13 +120,14 @@ class ActionFlow:
         if previous is not None:
             count = state.duplicate_counts.get(key, 0) + 1
             state.duplicate_counts[key] = count
+            state.duplicate_skips += 1
             result = self._duplicate_result(action, previous, count)
-            if engine.progress_reporter:
-                engine.progress_reporter.tool_skipped(action, "duplicate skipped")
+            if services.progress_reporter:
+                services.progress_reporter.tool_skipped(action, "duplicate skipped")
             self._record(result, synthetic=True)
             return
 
-        preflight = getattr(engine.tools, "preflight", None)
+        preflight = getattr(services.tools, "preflight", None)
         if callable(preflight):
             result = preflight(
                 action,
@@ -108,14 +136,14 @@ class ActionFlow:
             )
             if result is not None:
                 self._attach_action_metadata(result, action)
-                if engine.progress_reporter:
-                    engine.progress_reporter.tool_skipped(action, "blocked by preflight")
+                if services.progress_reporter:
+                    services.progress_reporter.tool_skipped(action, "blocked by preflight")
                 self._record(result, synthetic=True)
-                if result.error_code in engine.non_retryable_error_codes:
+                if result.error_code in services.non_retryable_error_codes:
                     state.completed_actions[key] = result
                 return
 
-        definition = engine.tools.definition_for(action.name)
+        definition = services.tools.definition_for(action.name)
         result = self._delegated_scope_problem(action, definition, self.request)
         if result is not None:
             self._attach_action_metadata(result, action)
@@ -123,7 +151,7 @@ class ActionFlow:
             state.completed_actions[key] = result
             return
 
-        decision = engine.guardrails.check(action, definition)
+        decision = services.guardrails.check(action, definition)
         if decision.requires_confirmation:
             approval_key = (cwd, decision.risk_level, key)
             approval = (
@@ -138,8 +166,8 @@ class ActionFlow:
                     output="Tool execution was declined by the user." if approval is False else decision.reason,
                     error_code="approval_denied" if approval is False else "approval_required",
                 )
-                if engine.progress_reporter:
-                    engine.progress_reporter.tool_skipped(action, "denied by user")
+                if services.progress_reporter:
+                    services.progress_reporter.tool_skipped(action, "denied by user")
                 self._attach_action_metadata(result, action)
                 self._record(result, synthetic=True)
                 return
@@ -152,20 +180,28 @@ class ActionFlow:
                 output=decision.reason,
                 error_code=decision.error_code or "blocked_by_policy",
             )
-            if engine.progress_reporter:
-                engine.progress_reporter.tool_skipped(action, f"blocked: {decision.reason}")
+            if services.progress_reporter:
+                services.progress_reporter.tool_skipped(action, f"blocked: {decision.reason}")
             self._attach_action_metadata(result, action)
             self._record(result)
             return
 
-        result = self._execute_action(action, cwd, self.permissions, self.session)
+        started = time.monotonic()
+        try:
+            result, action_id = self._execute_action(
+                action, cwd, self.permissions, self.session, decision.risk_level,
+            )
+        finally:
+            state.tool_seconds += max(0.0, time.monotonic() - started)
         self._record(result, refresh=True)
-        if result.success or result.error_code in engine.non_retryable_error_codes:
+        if result.success or result.error_code in services.non_retryable_error_codes:
             if result.success and self._may_mutate_workspace(decision.risk_level):
                 state.clear_action_cache()
                 if "workspace_change" in result.metadata.get("evidence", []):
                     state.progress_recovery_sent = False
             state.completed_actions[key] = result
+        if action_id is not None:
+            services.execution_context.action_journal.finish(action_id, result)
 
     def _may_mutate_workspace(self, risk_level: str) -> bool:
         return risk_level in {"write", "execute", "test", "destructive"}
@@ -188,7 +224,7 @@ class ActionFlow:
                 for line in diff.splitlines():
                     if line.startswith(("+++ b/", "--- a/")):
                         candidates.append(line[6:].strip())
-        if not candidates and action.name in self.engine.non_resource_control_tools:
+        if not candidates and action.name in self.environment.non_resource_control_tools:
             return None
         if not candidates:
             return ToolResult(
@@ -241,16 +277,16 @@ class ActionFlow:
         return approval_key[1] != "destructive" and approval_key in approved_actions
 
     def _approval_decision(self, action, reason: str) -> bool | None:
-        if self.engine.approval_callback is None:
+        if self.environment.approval_callback is None:
             return None
         started = time.monotonic()
         try:
-            approved = self.engine.approval_callback(action, reason)
+            approved = self.environment.approval_callback(action, reason)
         finally:
             waited = max(0.0, time.monotonic() - started)
             self.state.approval_wait_seconds += waited
-            self.engine._execution_context.approval_wait_seconds = self.state.approval_wait_seconds
-        self.engine.logger.record(
+            self.environment.execution_context.approval_wait_seconds = self.state.approval_wait_seconds
+        self.environment.logger.record(
             "safety.approval",
             {"tool": action.name, "approved": approved, "reason": reason, "wait_seconds": waited},
         )
@@ -262,13 +298,26 @@ class ActionFlow:
         cwd: str,
         permissions: PermissionContext,
         session: SessionContext,
-    ) -> ToolResult:
+        risk_level: str,
+    ) -> tuple[ToolResult, str | None]:
         progress_handle = None
         result = None
-        if self.engine.progress_reporter:
-            progress_handle = self.engine.progress_reporter.tool_started(action.name)
+        action_id = None
+        if self.environment.progress_reporter:
+            progress_handle = self.environment.progress_reporter.tool_started(action.name)
         try:
-            result = self.engine.tools.execute(
+            self.environment.raise_if_cancelled()
+            journal = self.environment.execution_context.action_journal
+            if journal is not None:
+                action_id = journal.start(action, cwd, risk_level)
+            if action_id is not None:
+                self.environment.logger.record("action.admitted", {
+                    "action_id": action_id, "name": action.name,
+                    "workspace": cwd, "risk_level": risk_level,
+                    "arguments": action.arguments,
+                })
+            self.state.real_tool_actions += 1
+            result = self.environment.tools.execute(
                 action,
                 cwd=cwd,
                 allowed_roots=permissions.workspace_roots(scopes={"run", "session"}),
@@ -276,7 +325,7 @@ class ActionFlow:
             self._attach_action_metadata(result, action)
             if result.error_code == "path_outside_workspace":
                 if progress_handle is not None:
-                    self.engine.progress_reporter.tool_finished(progress_handle, action, result)
+                    self.environment.progress_reporter.tool_finished(progress_handle, action, result)
                     progress_handle = None
 
                 grant_path = self._workspace_grant_path(result)
@@ -314,17 +363,18 @@ class ActionFlow:
                                 "requested_by": action.name,
                             },
                         )
-                        return ret_res
+                        return ret_res, action_id
 
                     grant = permissions.grant_workspace_path(grant_path, scope=scope)
                     self._record_workspace_grant(session, grant.path)
-                    self.engine.logger.record(
+                    self.environment.logger.record(
                         "workspace.grant",
                         {"path": grant.path, "scope": grant.scope, "requested_by": action.name},
                     )
-                    if self.engine.progress_reporter:
-                        progress_handle = self.engine.progress_reporter.tool_started(action.name)
-                    retried = self.engine.tools.execute(
+                    if self.environment.progress_reporter:
+                        progress_handle = self.environment.progress_reporter.tool_started(action.name)
+                    self.environment.raise_if_cancelled()
+                    retried = self.environment.tools.execute(
                         action,
                         cwd=cwd,
                         allowed_roots=permissions.workspace_roots(scopes={"run", "session"}),
@@ -336,19 +386,19 @@ class ActionFlow:
                     result = retried
             if result is not None and result.success and action.name == "workspace_open":
                 self._activate_workspace(session, result)
-            if self.engine.capability_warehouse is not None and result is not None:
-                self.engine.capability_warehouse.mark_used(
+            if self.environment.capability_warehouse is not None and result is not None:
+                self.environment.capability_warehouse.mark_used(
                     action.name,
                     success=result.success,
                     error_code=result.error_code,
                 )
-            return result
+            return result, action_id
         finally:
             if progress_handle is not None:
                 if result is None:
-                    self.engine.progress_reporter.tool_aborted(progress_handle)
+                    self.environment.progress_reporter.tool_aborted(progress_handle)
                 else:
-                    self.engine.progress_reporter.tool_finished(progress_handle, action, result)
+                    self.environment.progress_reporter.tool_finished(progress_handle, action, result)
 
     def _workspace_grant_path(self, result: ToolResult) -> str | None:
         raw_path = result.metadata.get("resolved_path") or result.metadata.get("path")
@@ -394,7 +444,7 @@ class ActionFlow:
         # Read cache reuse is not a repeated side effect. The whole-turn
         # observation policy owns read stagnation, including mixed tool turns.
         read_reuse = previous.success and previous.metadata.get("execution_risk") == "read"
-        blocked = not previous.success or (not read_reuse and count > self.engine.max_duplicate_skips)
+        blocked = not previous.success or (not read_reuse and count > self.environment.max_duplicate_skips)
         return ToolResult(
             name=action.name,
             success=not blocked,
@@ -410,7 +460,7 @@ class ActionFlow:
                 ) if key in previous.metadata},
                 "duplicate": True,
                 "duplicate_count": count,
-                "duplicate_limit": self.engine.max_duplicate_skips,
+                "duplicate_limit": self.environment.max_duplicate_skips,
                 "skipped": True,
                 "action_arguments": dict(action.arguments),
                 "previous_output": previous.output,

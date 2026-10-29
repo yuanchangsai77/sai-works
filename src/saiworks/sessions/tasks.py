@@ -11,6 +11,7 @@ from typing import Any, get_args, get_origin, get_type_hints
 from uuid import uuid4
 
 from ..capabilities.model import InstructionContent
+from ..safety.redaction import redact
 from ..types import ExecutionSummary, SessionResumeState, SessionRunTrace, UserRequest, WorkspaceSessionState
 
 
@@ -78,6 +79,12 @@ class TaskSnapshot:
 
 APPROVAL_STATES = frozenset({"pending", "approved", "denied", "expired", "cancelled", "consumed"})
 APPROVAL_DECISIONS = frozenset({"approve", "deny"})
+UNKNOWN_EFFECT_ERROR_CODES = frozenset({
+    "timeout", "shell_protocol_error", "mcp_protocol_error",
+    "mcp_tool_call_failed", "mcp_http_error",
+    "mcp_transport_connect_failed", "mcp_transport_timeout",
+    "mcp_transport_read_timeout", "mcp_transport_closed",
+})
 
 
 def _utcnow() -> datetime:
@@ -135,7 +142,7 @@ class TaskStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
-            if connection.execute("PRAGMA user_version").fetchone()[0] not in (0, 1, 2, 3):
+            if connection.execute("PRAGMA user_version").fetchone()[0] not in (0, 1, 2, 3, 4, 5):
                 raise ValueError("Unsupported task database version")
             connection.execute("""CREATE TABLE IF NOT EXISTS tasks (
                 submission_id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
@@ -165,7 +172,21 @@ class TaskStore:
             connection.execute("""CREATE TABLE IF NOT EXISTS task_cancellations (
                 task_id TEXT PRIMARY KEY, accepted_at TEXT NOT NULL
             )""")
-            connection.execute("PRAGMA user_version=3")
+            connection.execute("""CREATE TABLE IF NOT EXISTS action_attempts (
+                action_id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
+                submission_id TEXT NOT NULL, action_fingerprint TEXT NOT NULL,
+                action_name TEXT NOT NULL, workspace_root TEXT NOT NULL,
+                risk_level TEXT NOT NULL, state TEXT NOT NULL,
+                arguments_summary TEXT NOT NULL DEFAULT '{}',
+                started_at TEXT NOT NULL, finished_at TEXT,
+                success INTEGER, error_code TEXT
+            )""")
+            action_columns = {row[1] for row in connection.execute("PRAGMA table_info(action_attempts)")}
+            if "arguments_summary" not in action_columns:
+                connection.execute("ALTER TABLE action_attempts ADD COLUMN arguments_summary TEXT NOT NULL DEFAULT '{}'")
+            connection.execute("CREATE INDEX IF NOT EXISTS action_attempts_task ON action_attempts(task_id, action_fingerprint, state)")
+            connection.execute("CREATE INDEX IF NOT EXISTS action_attempts_unknown ON action_attempts(task_id, state)")
+            connection.execute("PRAGMA user_version=5")
 
     def _connect(self):
         connection = sqlite3.connect(self.path, timeout=30)
@@ -395,6 +416,111 @@ class TaskStore:
         with closing(self._connect()) as connection:
             row = connection.execute("SELECT accepted_at FROM task_cancellations WHERE task_id=?", (task_id,)).fetchone()
             return row[0] if row is not None else None
+
+    def start_action(self, task_id: str, submission_id: str, action_name: str,
+                     arguments: dict, workspace_root: str, risk_level: str) -> str | None:
+        """Durably admit an action in the same transaction order as cancellation."""
+        workspace = str(Path(workspace_root).resolve())
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            running = connection.execute(
+                "SELECT 1 FROM tasks WHERE task_id=? AND submission_id=? AND state='running'",
+                (task_id, submission_id),
+            ).fetchone()
+            if running is None:
+                raise RuntimeError("Task action has no running submission")
+            if connection.execute(
+                "SELECT 1 FROM task_cancellations WHERE task_id=?", (task_id,),
+            ).fetchone() is not None:
+                raise KeyboardInterrupt
+            if risk_level == "read":
+                return None
+            unresolved = connection.execute(
+                """SELECT 1 FROM action_attempts WHERE task_id=?
+                AND state IN ('started', 'uncertain') LIMIT 1""",
+                (task_id,),
+            ).fetchone()
+            if unresolved is not None:
+                raise RuntimeError(
+                    "A previous task action has an unknown outcome; reconcile its external effect before another effectful action"
+                )
+            identity_arguments = dict(arguments)
+            if action_name in {"shell_exec", "run_tests"}:
+                identity_arguments.pop("timeout", None)
+            fingerprint = hashlib.sha256(_json({
+                "task_id": task_id, "name": action_name, "arguments": identity_arguments,
+                "workspace": workspace,
+            }).encode()).hexdigest()
+            prior = connection.execute(
+                """SELECT state FROM action_attempts WHERE task_id=? AND action_fingerprint=?
+                AND state='performed' LIMIT 1""",
+                (task_id, fingerprint),
+            ).fetchone()
+            if prior is not None:
+                raise RuntimeError("A previous attempt of this action was confirmed performed; it must not be replayed")
+            action_id = uuid4().hex
+            connection.execute("""INSERT INTO action_attempts
+                (action_id, task_id, submission_id, action_fingerprint, action_name,
+                 workspace_root, risk_level, arguments_summary, state, started_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'started', ?)""",
+                (action_id, task_id, submission_id, fingerprint, action_name,
+                 workspace, risk_level, _json(redact(dict(arguments))), _utcnow().isoformat()),
+            )
+            return action_id
+
+    def finish_action(self, action_id: str, *, success: bool, error_code: str | None) -> None:
+        with closing(self._connect()) as connection, connection:
+            attempt = connection.execute(
+                "SELECT action_name, risk_level FROM action_attempts WHERE action_id=? AND state='started'",
+                (action_id,),
+            ).fetchone()
+            if attempt is None:
+                raise RuntimeError("Action attempt is not active")
+            outcome_unknown = not success and (
+                error_code in UNKNOWN_EFFECT_ERROR_CODES
+                or error_code == "nonzero_exit"
+            )
+            changed = connection.execute("""UPDATE action_attempts
+                SET state=?, finished_at=?, success=?, error_code=?
+                WHERE action_id=? AND state='started'""",
+                ("uncertain" if outcome_unknown else "finished", _utcnow().isoformat(),
+                 int(success), error_code, action_id),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError("Action attempt is not active")
+
+    def unknown_actions(self, task_id: str) -> tuple[dict[str, Any], ...]:
+        """Expose durable, redacted action facts for explicit recovery."""
+        with closing(self._connect()) as connection:
+            rows = connection.execute("""SELECT action_id, submission_id, action_fingerprint, action_name,
+                workspace_root, risk_level, arguments_summary, state, error_code, started_at FROM action_attempts
+                WHERE task_id=? AND state IN ('started', 'uncertain') AND risk_level!='read'
+                ORDER BY started_at, action_id""", (task_id,)).fetchall()
+            return tuple({**dict(row), "arguments_summary": json.loads(row["arguments_summary"])} for row in rows)
+
+    def resolve_action(self, action_id: str, *, effect_state: str) -> None:
+        """Record an authoritative external check; never infer it from a missing result."""
+        if effect_state not in {"performed", "not_performed"}:
+            raise ValueError("Invalid reconciled effect state")
+        with closing(self._connect()) as connection, connection:
+            connection.execute("BEGIN IMMEDIATE")
+            attempt = connection.execute(
+                "SELECT task_id, state FROM action_attempts WHERE action_id=? AND risk_level!='read'",
+                (action_id,),
+            ).fetchone()
+            if attempt is None or attempt["state"] not in {"started", "uncertain"}:
+                raise RuntimeError("Action is not awaiting effect reconciliation")
+            if connection.execute(
+                "SELECT 1 FROM tasks WHERE task_id=? AND state='running' LIMIT 1",
+                (attempt["task_id"],),
+            ).fetchone() is not None:
+                raise RuntimeError("Task execution is still running; stop or fence it before effect reconciliation")
+            changed = connection.execute("""UPDATE action_attempts SET state=?, finished_at=?
+                WHERE action_id=? AND state IN ('started', 'uncertain') AND risk_level!='read'""",
+                (effect_state, _utcnow().isoformat(), action_id),
+            ).rowcount
+            if changed != 1:
+                raise RuntimeError("Action is not awaiting effect reconciliation")
 
     def get_approval(self, approval_id: str) -> ApprovalRecord | None:
         with closing(self._connect()) as connection:

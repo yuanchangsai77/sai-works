@@ -7,6 +7,7 @@ from threading import Condition, RLock
 from uuid import uuid4
 
 from .orchestration.engine import ExecutionContext
+from .orchestration.action_journal import TaskActionJournal
 from .context.packager import ContextBudgetExceededError
 from .orchestration.failures import runtime_failure_message
 from .sessions.tasks import ApprovalRecord, TaskSnapshot, TaskStore
@@ -197,7 +198,22 @@ class Runtime:
         task_id, _actor = self._require_control(control, "cancel")
         if self.task_store is None:
             raise RuntimeError("Cancellation acceptance requires a task store")
-        return self.task_store.accept_cancellation(task_id, now=now)
+        accepted_at = self.task_store.accept_cancellation(task_id, now=now)
+        with self._condition:
+            context = self._task_contexts.get(task_id)
+            if context is not None:
+                context.cancellation.set()
+            active = context is not None and self._active_context is context
+        if active and getattr(self.engine, "_execution_context", None) is context:
+            try:
+                self.engine.cancel_current_run()
+            except Exception as error:
+                if self.logger is not None:
+                    try:
+                        self.logger.record("tool.cleanup_failed", {"error": str(error)})
+                    except Exception:
+                        pass
+        return accepted_at
 
     def pending_approvals(self, control: TaskControl, *, now=None) -> tuple[ApprovalRecord, ...]:
         task_id, _actor = self._require_control(control, "approve")
@@ -324,6 +340,11 @@ class Runtime:
                 claimed = True
                 bound_request = record.request()
                 context = self._task_contexts[record.task_id]
+                context.action_journal = TaskActionJournal(
+                    self.task_store, record.task_id, record.submission_id,
+                )
+                if self.task_store.cancellation_accepted(record.task_id) is not None:
+                    context.cancellation.set()
                 self.last_summary = None
                 self.engine.last_failure_summary = None
                 self._active_context = context

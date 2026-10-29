@@ -23,6 +23,11 @@ class RunState:
     approval_wait_seconds: float = 0.0
     tools_closed: bool = False
     terminal_summary: ExecutionSummary | None = None
+    turn_count: int = 0
+    real_tool_actions: int = 0
+    duplicate_skips: int = 0
+    model_seconds: float = 0.0
+    tool_seconds: float = 0.0
 
     def clear_action_cache(self) -> None:
         self.completed_actions.clear()

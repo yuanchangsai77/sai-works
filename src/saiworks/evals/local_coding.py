@@ -172,6 +172,13 @@ def fixture_text(workspace: Path, name: str) -> str | None:
         return None
 
 
+def latest_run_metrics(logger: InMemoryLogger) -> dict:
+    return next(
+        (dict(event.payload) for event in reversed(logger.events) if event.name == "run.metrics"),
+        {},
+    )
+
+
 def score_case(case: str, workspace: Path, summary, original: dict[str, str]) -> tuple[bool, list[str]]:
     failures: list[str] = []
     if summary is None:
@@ -265,6 +272,7 @@ def run_case(case: str, root: Path) -> dict:
         ] if summary else [],
         "final_message": summary.final_message[:1000] if summary else "",
         "run_log": str(logger.base_dir / logger.last_run_id) if logger.last_run_id else None,
+        "run_metrics": latest_run_metrics(logger),
         "workspace": str(workspace),
     }
 
@@ -294,6 +302,7 @@ def run_compaction_case(root: Path) -> dict:
     logger = InMemoryLogger(base_dir=str(workspace / ".saiworks" / "runs"))
     first = second = compacted = None
     first_run_log = None
+    first_run_metrics = {}
     error = None
     with working_directory(workspace):
         runtime = create_runtime(mode="auto", workspace_root=workspace, require_model=True, _logger=logger)
@@ -306,6 +315,7 @@ def run_compaction_case(root: Path) -> dict:
             request = runtime.build_session_request(first_prompt, str(workspace), session, conversation, [])
             first = runtime.execute_session_turn(request, first_prompt, session, conversation, session.context_generation)
             first_run_log = str(logger.base_dir / logger.last_run_id) if logger.last_run_id else None
+            first_run_metrics = latest_run_metrics(logger)
             if first is not None and first.outcome == "completed":
                 for index in range(32):
                     filler = " ".join(f"background-{index}-{part}" for part in range(55))
@@ -334,7 +344,9 @@ def run_compaction_case(root: Path) -> dict:
         "outcome": second.outcome if second else None,
         "archive_id": compacted.archive_id if compacted else None,
         "first_run_log": first_run_log,
+        "first_run_metrics": first_run_metrics,
         "run_log": str(logger.base_dir / logger.last_run_id) if logger.last_run_id else None,
+        "run_metrics": latest_run_metrics(logger),
         "workspace": str(workspace),
         "final_message": second.final_message[:1000] if second else "",
     }
@@ -364,6 +376,7 @@ def run_interrupt_case(root: Path) -> dict:
     interrupted = False
     resume_outcome = ""
     first_run_log = None
+    first_run_metrics = {}
     second_run_log = None
     error = None
     with working_directory(workspace):
@@ -383,6 +396,7 @@ def run_interrupt_case(root: Path) -> dict:
                 interrupted = True
             partial = runtime.last_summary
             first_run_log = str(first_logger.base_dir / first_logger.last_run_id) if first_logger.last_run_id else None
+            first_run_metrics = latest_run_metrics(first_logger)
         except Exception as exc:
             error = type(exc).__name__
         finally:
@@ -422,6 +436,8 @@ def run_interrupt_case(root: Path) -> dict:
         "resume_outcome": resume_outcome,
         "outcome": final.outcome if final else None,
         "first_run_log": first_run_log, "run_log": second_run_log,
+        "first_run_metrics": first_run_metrics,
+        "run_metrics": latest_run_metrics(second_logger),
         "workspace": str(workspace),
         "final_message": final.final_message[:1000] if final else "",
     }
