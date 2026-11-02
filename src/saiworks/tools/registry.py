@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from contextlib import contextmanager
+from threading import Lock, RLock
 
 from ..observations import Observation, ObservationArchive, observation_for
 from ..types import ToolAction, ToolDefinition, ToolResult
-from .base import ToolContext
+from .base import EffectTracker, ExecutionPhase, ToolContext, ToolExecution
 from .result_packager import TRUNCATION_MARKER, ToolResultPackager
 from .schema_validation import validate_schema
 
@@ -17,8 +19,11 @@ class ToolRegistry:
         interceptors: list | None = None,
     ) -> None:
         self._tools = {}
+        self._execution_lock = Lock()
         self._logger = logger
         self._state = {}
+        self._state_lock = RLock()
+        self._state_generation = 0
         self._persistent_state_names: set[str] = set()
         self._cleanup_completed: set[str] = set()
         self._providers = []
@@ -49,13 +54,15 @@ class ToolRegistry:
         return True
 
     def state_for(self, name: str, default=None):
-        return self._state.get(name, default)
+        with self._state_lock:
+            return self._state.get(name, default)
 
     def attach_state(self, name: str, value, *, persistent: bool = False) -> None:
-        self._state[name] = value
-        self._cleanup_completed.discard(name)
-        if persistent:
-            self._persistent_state_names.add(name)
+        with self._state_lock:
+            self._state[name] = value
+            self._cleanup_completed.discard(name)
+            if persistent:
+                self._persistent_state_names.add(name)
 
     def attach_provider(self, provider) -> None:
         self._providers.append(provider)
@@ -90,24 +97,32 @@ class ToolRegistry:
                 self._provider_tool_owners[name] = provider_id
 
     def reset_state(self) -> None:
-        errors = []
-        for name, value in tuple(self._state.items()):
-            if name in self._cleanup_completed:
-                continue
-            try:
-                close = getattr(value, "close", None)
-                if callable(close):
-                    close()
-            except Exception as error:
-                errors.append(error)
-                continue
-            if name in self._persistent_state_names:
-                self._cleanup_completed.add(name)
-            else:
-                self._state.pop(name, None)
-        if errors:
-            raise ExceptionGroup("Tool state cleanup failed", errors)
-        self._cleanup_completed.clear()
+        with self._state_lock:
+            self._state_generation += 1
+            errors = []
+            original_names = set(self._state)
+            for name, value in tuple(self._state.items()):
+                if name in self._cleanup_completed:
+                    continue
+                try:
+                    close = getattr(value, "close", None)
+                    if callable(close):
+                        close()
+                except Exception as error:
+                    errors.append(error)
+                    continue
+                if self._state.get(name) is not value:
+                    errors.append(RuntimeError("Resource replaced during cleanup"))
+                    continue
+                if name in self._persistent_state_names:
+                    self._cleanup_completed.add(name)
+                else:
+                    self._state.pop(name, None)
+            if set(self._state) - original_names:
+                errors.append(RuntimeError("New resources attached during cleanup"))
+            if errors:
+                raise ExceptionGroup("Tool state cleanup failed", errors)
+            self._cleanup_completed.clear()
 
     def definitions(self) -> list[ToolDefinition]:
         self.refresh_providers()
@@ -128,6 +143,17 @@ class ToolRegistry:
         return tool.definition()
 
     def execute(self, action: ToolAction, *, cwd: str = ".", allowed_roots: list[str] | None = None) -> ToolResult:
+        return self.execute_tracked(action, cwd=cwd, allowed_roots=allowed_roots).result
+
+    def execute_tracked(self, action: ToolAction, *, cwd: str = ".", allowed_roots: list[str] | None = None) -> ToolExecution:
+        if not self._execution_lock.acquire(blocking=False):
+            raise RuntimeError("Tool registry is already executing a tool")
+        try:
+            return self._execute_tracked(action, cwd=cwd, allowed_roots=allowed_roots)
+        finally:
+            self._execution_lock.release()
+
+    def _execute_tracked(self, action: ToolAction, *, cwd: str, allowed_roots: list[str] | None) -> ToolExecution:
         blocked = self.preflight(action, cwd=cwd, allowed_roots=allowed_roots)
         if blocked is not None:
             blocked = self._result_packager.package(blocked)
@@ -135,7 +161,7 @@ class ToolRegistry:
                 blocked.metadata.setdefault("action_arguments", dict(action.arguments))
             result_event = self._record_result(blocked)
             self._attach_action_artifact_ref(blocked, result_event)
-            return blocked
+            return ToolExecution(blocked, ExecutionPhase.NOT_STARTED)
         tool = self._tools[action.name]
         context = self._context(cwd, allowed_roots)
         action_event = self._logger.record(
@@ -145,6 +171,8 @@ class ToolRegistry:
             path: len(entry.get("observations", []))
             for path, entry in self._state.get("read_files", {}).items()
         }
+        tracker = EffectTracker() if getattr(tool, "tracks_effects", False) else None
+        context.effect_tracker = tracker
         result = tool.run(action, context)
         adapter = getattr(tool, "observation_adapter", None)
         spec = adapter(action, result, context) if callable(adapter) and result.success else None
@@ -173,7 +201,10 @@ class ToolRegistry:
             result.metadata["invalidates_evidence"] = ["test"]
         result_event = self._record_result(result)
         self._attach_action_artifact_ref(result, result_event)
-        return result
+        phase = ExecutionPhase.UNKNOWN if tracker is None else (
+            ExecutionPhase.STARTED if tracker.started else ExecutionPhase.NOT_STARTED
+        )
+        return ToolExecution(result, phase)
 
     def _bind_visible_read_state(
         self, before: dict[str, int], observation_id: str, result: ToolResult, raw_output: str,
@@ -277,11 +308,21 @@ class ToolRegistry:
         cwd: str,
         allowed_roots: list[str] | None,
     ) -> ToolContext:
+        generation = self._state_generation
+
+        @contextmanager
+        def resource_guard():
+            with self._state_lock:
+                if generation != self._state_generation:
+                    raise KeyboardInterrupt
+                yield
+
         return ToolContext(
             cwd=cwd,
             state=self._state,
             allowed_roots=list(allowed_roots or []),
             max_output_bytes=self._max_output_bytes,
+            resource_guard=resource_guard,
         )
 
     def summarize_result(self, result: ToolResult) -> str:

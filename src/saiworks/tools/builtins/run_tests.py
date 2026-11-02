@@ -19,6 +19,7 @@ def tool(
     resolver = command_resolver or ProjectCommandResolver()
     return SimpleTool(
         name="run_tests",
+        tracks_effects=True,
         description=(
             "Run a test command in the workspace. If command is omitted, "
             "detect one from the nearest supported project."

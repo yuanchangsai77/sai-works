@@ -23,6 +23,7 @@ MAX_PATCH_LINES = 2_000
 def tool() -> SimpleTool:
     return SimpleTool(
         name="patch",
+        tracks_effects=True,
         description=(
             "Apply a unified diff inside the workspace after validating paths and "
             "matching old lines at their stated location. Previously observed "
@@ -157,6 +158,8 @@ def run(action: ToolAction, context: ToolContext) -> ToolResult:
     if use_unidiff_zero:
         cmd.append("--unidiff-zero")
     cmd.append("-")
+    if context.effect_tracker is not None:
+        context.effect_tracker.begin()
     applied = run_command(cmd, root, input_text=diff, shell=False)
     if not applied.success:
         return retarget(applied, action.name)

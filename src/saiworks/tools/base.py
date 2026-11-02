@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Protocol
+from enum import Enum
 
 from ..types import ToolAction, ToolDefinition, ToolResult
 
@@ -26,12 +27,38 @@ class Tool(Protocol):
         """Return a user-facing run summary for a result."""
 
 
+class ExecutionPhase(Enum):
+    UNKNOWN = "unknown"
+    NOT_STARTED = "not_started"
+    STARTED = "started"
+
+
+@dataclass(frozen=True, slots=True)
+class ToolExecution:
+    result: ToolResult
+    phase: ExecutionPhase = ExecutionPhase.UNKNOWN
+
+
+@dataclass(slots=True)
+class EffectTracker:
+    _started: bool = field(default=False, init=False)
+
+    @property
+    def started(self) -> bool:
+        return self._started
+
+    def begin(self) -> None:
+        self._started = True
+
+
 @dataclass(slots=True)
 class ToolContext:
     cwd: str
     state: dict = field(default_factory=dict)
     allowed_roots: list[str] = field(default_factory=list)
     max_output_bytes: int = 32_000
+    effect_tracker: EffectTracker | None = None
+    resource_guard: Callable | None = None
 
 
 @dataclass(slots=True)
@@ -44,6 +71,7 @@ class SimpleTool:
     risk_level: str = "read"
     evidence_kinds: list[str] = field(default_factory=list)
     exposed: bool = True
+    tracks_effects: bool = False
     # User-facing run summary only. It is local display logic and must not be
     # written into ToolResult output or metadata.
     summarizer: Callable[[ToolResult], str] | None = None

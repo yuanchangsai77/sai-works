@@ -1,15 +1,17 @@
 from __future__ import annotations
 
 import selectors
+from contextlib import nullcontext
+from threading import RLock
 import os
 import shlex
-import signal
 import subprocess
 import time
 from pathlib import Path
 
 from ...types import ToolAction, ToolResult
 from ..base import SimpleTool, ToolContext
+from ..process_lifecycle import OwnedProcess, supports_process_groups
 from ..shared import clip, format_process_output, path_error, resolve_workspace_path, retarget, schema
 from ..summary import process_result_summary
 
@@ -20,6 +22,7 @@ PROCESS_STOP_GRACE_SECONDS = 0.5
 def tool() -> SimpleTool:
     return SimpleTool(
         name="shell_exec",
+        tracks_effects=True,
         description="Execute a shell command in the workspace and return stdout, stderr, and exit code.",
         arguments={
             "command": "Command to execute.",
@@ -46,10 +49,15 @@ def run(action: ToolAction, context: ToolContext) -> ToolResult:
         return retarget(cwd, action.name)
     if error := path_error(action, cwd, "directory"):
         return error
-    session = _shell_session(context, cwd.path)
-    cd_base = cwd.path if "cwd" in action.arguments else session.cwd
+    existing = context.state.get("shell_session")
+    reusable = (isinstance(existing, ShellSession) and not existing.closed
+                and not existing._process_owner.leader_exited() and existing.context.cwd == context.cwd)
+    cd_base = existing.cwd if reusable and "cwd" not in action.arguments else cwd.path
     if error := _shell_cd_error(action, context, cd_base):
         return error
+    if context.effect_tracker is not None:
+        context.effect_tracker.begin()
+    session = _shell_session(context, cwd.path)
     timeout = float(action.arguments.get("timeout", 30))
     result = session.run(
         str(action.arguments["command"]),
@@ -67,43 +75,50 @@ class ShellSession:
     def __init__(self, context: ToolContext, cwd: Path) -> None:
         self.context = context
         self.cwd = cwd
+        self._lifecycle_lock = RLock()
+        self._closed = False
         self.process = self._start(cwd)
 
+    @property
+    def closed(self) -> bool:
+        return self._closed
+
     def run(self, command: str, cwd: Path, *, timeout: float, reset_cwd: bool = False) -> ToolResult:
-        if self.process.poll() is not None:
-            self.process = self._start(cwd)
-            self.cwd = cwd
+        with self._lifecycle_lock:
+            if self._closed:
+                raise KeyboardInterrupt
+            if self._process_owner.leader_exited():
+                self.close()
+                return ToolResult("command", False, "persistent shell exited before command dispatch", "shell_protocol_error")
 
-        if (exit_code := _standalone_exit_code(command)) is not None:
-            return ToolResult(
-                name="command",
-                success=exit_code == 0,
-                output=format_process_output("", "", exit_code),
-                error_code=None if exit_code == 0 else "nonzero_exit",
-                metadata={"exit_code": exit_code, "stdout": "", "stderr": "", "cwd": str(self.cwd)},
+            if (exit_code := _standalone_exit_code(command)) is not None:
+                return ToolResult(
+                    name="command",
+                    success=exit_code == 0,
+                    output=format_process_output("", "", exit_code),
+                    error_code=None if exit_code == 0 else "nonzero_exit",
+                    metadata={"exit_code": exit_code, "stdout": "", "stderr": "", "cwd": str(self.cwd)},
+                )
+
+            setup = ""
+            if reset_cwd and cwd != self.cwd:
+                quoted_cwd = shlex.quote(str(cwd))
+                setup = f"cd {quoted_cwd} || exit $?\n"
+
+            marker = f"__SAIWORKS_DONE_{time.monotonic_ns()}__"
+            wrapped = (
+                f"{setup}{command}\n"
+                "__saiworks_status=$?\n"
+                f"printf '\\n{marker}:%s:%s\\n' \"$__saiworks_status\" \"$PWD\"\n"
             )
-
-        setup = ""
-        if reset_cwd and cwd != self.cwd:
-            quoted_cwd = shlex.quote(str(cwd))
-            setup = f"cd {quoted_cwd} || exit $?\n"
-
-        marker = f"__SAIWORKS_DONE_{time.monotonic_ns()}__"
-        wrapped = (
-            f"{setup}{command}\n"
-            "__saiworks_status=$?\n"
-            f"printf '\\n{marker}:%s:%s\\n' \"$__saiworks_status\" \"$PWD\"\n"
-        )
-        assert self.process.stdin is not None
-        self.process.stdin.write(wrapped.encode("utf-8"))
-        self.process.stdin.flush()
+            assert self.process.stdin is not None
+            self.process.stdin.write(wrapped.encode("utf-8"))
+            self.process.stdin.flush()
 
         output, timed_out, truncated = self._read_until_marker(marker, timeout)
         if timed_out:
             truncated = truncated or len(output.encode("utf-8")) > self.context.max_output_bytes
             self.close()
-            self.process = self._start(cwd)
-            self.cwd = cwd
             return ToolResult(
                 name="command",
                 success=False,
@@ -121,8 +136,6 @@ class ShellSession:
         truncated = truncated or len(stdout.encode("utf-8")) > self.context.max_output_bytes
         if exit_code is None or reported_cwd is None:
             self.close()
-            self.process = self._start(cwd)
-            self.cwd = cwd
             return ToolResult(
                 name="command",
                 success=False,
@@ -134,8 +147,6 @@ class ShellSession:
         cwd_check = resolve_workspace_path(self.context, reported_cwd)
         if isinstance(cwd_check, ToolResult):
             self.close()
-            self.process = self._start(cwd)
-            self.cwd = cwd
             cwd_check.name = "command"
             cwd_check.output = f"persistent shell cwd escaped the authorized workspace: {reported_cwd}"
             return cwd_check
@@ -157,41 +168,23 @@ class ShellSession:
         )
 
     def close(self) -> None:
-        if self.process.poll() is not None:
-            return
-        self._signal_process_group(signal.SIGTERM)
-        try:
-            self.process.wait(timeout=PROCESS_STOP_GRACE_SECONDS)
-            return
-        except subprocess.TimeoutExpired:
-            pass
-        self._signal_process_group(signal.SIGKILL)
-        try:
-            self.process.wait(timeout=PROCESS_STOP_GRACE_SECONDS)
-        except subprocess.TimeoutExpired:
-            pass
+        with self._lifecycle_lock:
+            self._closed = True
+            self._process_owner.close(PROCESS_STOP_GRACE_SECONDS)
 
     def _start(self, cwd: Path):
-        return subprocess.Popen(
+        owns_group = supports_process_groups()
+        process = subprocess.Popen(
             ["bash", "--noprofile", "--norc"],
             cwd=cwd,
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             bufsize=0,
-            start_new_session=os.name == "posix",
+            start_new_session=owns_group,
         )
-
-    def _signal_process_group(self, sig: int) -> None:
-        if self.process.poll() is not None:
-            return
-        if os.name == "posix":
-            try:
-                os.killpg(self.process.pid, sig)
-                return
-            except ProcessLookupError:
-                return
-        self.process.send_signal(sig)
+        self._process_owner = OwnedProcess(process, owns_group=owns_group)
+        return process
 
     def _read_until_marker(self, marker: str, timeout: float) -> tuple[str, bool, bool]:
         assert self.process.stdout is not None
@@ -258,18 +251,20 @@ class ShellSession:
 
 
 def _shell_session(context: ToolContext, cwd: Path) -> ShellSession:
-    existing = context.state.get("shell_session")
-    if isinstance(existing, ShellSession):
-        if existing.context.cwd != context.cwd:
-            existing.close()
-            session = ShellSession(context, cwd)
-            context.state["shell_session"] = session
-            return session
-        existing.context = context
-        return existing
-    session = ShellSession(context, cwd)
-    context.state["shell_session"] = session
-    return session
+    guard = context.resource_guard() if context.resource_guard is not None else nullcontext()
+    with guard:
+        existing = context.state.get("shell_session")
+        if isinstance(existing, ShellSession) and not existing.closed:
+            if existing.context.cwd != context.cwd or existing._process_owner.leader_exited():
+                existing.close()
+                session = ShellSession(context, cwd)
+                context.state["shell_session"] = session
+                return session
+            existing.context = context
+            return existing
+        session = ShellSession(context, cwd)
+        context.state["shell_session"] = session
+        return session
 
 
 def _shell_cd_error(action: ToolAction, context: ToolContext, cwd_path) -> ToolResult | None:
