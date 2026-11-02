@@ -3603,3 +3603,31 @@ def test_completed_trace_does_not_keep_intermediate_duplicate_as_open_issue(tmp_
 
     assert session.resume_state.open_issue == ""
     assert session.resume_state.recovery_hint == "Continue from the latest completed state and only call tools needed for the next step."
+
+
+def test_engine_never_replays_effectful_shell_after_post_execution_cd_escape(tmp_path):
+    class OutsideShellModel:
+        def respond(self, _session):
+            return ModelReply(
+                message="pwd parent",
+                actions=[ToolAction(name="shell_exec", arguments={"command": "printf x >> marker; builtin cd .. && pwd"})],
+                done=True,
+            )
+
+    approvals = []
+    logger = InMemoryLogger()
+    engine = ExecutionEngine(
+        model=OutsideShellModel(),
+        tools=build_builtin_registry(logger),
+        guardrails=Guardrails(policy=DefaultPolicy(), logger=logger),
+        logger=logger,
+        approval_callback=lambda action, _reason: approvals.append(action.name) or True,
+    )
+
+    summary = engine.execute(UserRequest(prompt="cd parent", cwd=str(tmp_path)))
+
+    assert approvals == ["shell_exec"]
+    assert summary.tool_results[0].success is False
+    assert summary.tool_results[0].error_code == "path_outside_workspace"
+    assert (tmp_path / "marker").read_text() == "x"
+    assert "workspace_grant" not in summary.tool_results[0].metadata

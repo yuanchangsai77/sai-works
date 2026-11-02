@@ -9,6 +9,7 @@ from typing import Callable
 
 from ..observations import observation_for
 from ..types import ToolAction, ToolResult, UserRequest
+from ..tools.base import ExecutionPhase, ToolExecution
 from .permissions import PermissionContext
 from .results import ResultRecorder
 from .run_state import RunState
@@ -188,7 +189,7 @@ class ActionFlow:
 
         started = time.monotonic()
         try:
-            result, action_id = self._execute_action(
+            result, action_id, phase = self._execute_action(
                 action, cwd, self.permissions, self.session, decision.risk_level,
             )
         finally:
@@ -201,7 +202,9 @@ class ActionFlow:
                     state.progress_recovery_sent = False
             state.completed_actions[key] = result
         if action_id is not None:
-            services.execution_context.action_journal.finish(action_id, result)
+            services.execution_context.action_journal.finish(
+                action_id, result, known_not_started=phase is ExecutionPhase.NOT_STARTED,
+            )
 
     def _may_mutate_workspace(self, risk_level: str) -> bool:
         return risk_level in {"write", "execute", "test", "destructive"}
@@ -299,7 +302,7 @@ class ActionFlow:
         permissions: PermissionContext,
         session: SessionContext,
         risk_level: str,
-    ) -> tuple[ToolResult, str | None]:
+    ) -> tuple[ToolResult, str | None, ExecutionPhase]:
         progress_handle = None
         result = None
         action_id = None
@@ -317,13 +320,15 @@ class ActionFlow:
                     "arguments": action.arguments,
                 })
             self.state.real_tool_actions += 1
-            result = self.environment.tools.execute(
+            execution = self._call_tool(
                 action,
                 cwd=cwd,
                 allowed_roots=permissions.workspace_roots(scopes={"run", "session"}),
             )
+            result, phase = execution.result, execution.phase
             self._attach_action_metadata(result, action)
-            if result.error_code == "path_outside_workspace":
+            can_retry_with_grant = risk_level == "read" or phase is ExecutionPhase.NOT_STARTED
+            if result.error_code == "path_outside_workspace" and can_retry_with_grant:
                 if progress_handle is not None:
                     self.environment.progress_reporter.tool_finished(progress_handle, action, result)
                     progress_handle = None
@@ -363,7 +368,7 @@ class ActionFlow:
                                 "requested_by": action.name,
                             },
                         )
-                        return ret_res, action_id
+                        return ret_res, action_id, phase
 
                     grant = permissions.grant_workspace_path(grant_path, scope=scope)
                     self._record_workspace_grant(session, grant.path)
@@ -374,11 +379,12 @@ class ActionFlow:
                     if self.environment.progress_reporter:
                         progress_handle = self.environment.progress_reporter.tool_started(action.name)
                     self.environment.raise_if_cancelled()
-                    retried = self.environment.tools.execute(
+                    retry = self._call_tool(
                         action,
                         cwd=cwd,
                         allowed_roots=permissions.workspace_roots(scopes={"run", "session"}),
                     )
+                    retried, phase = retry.result, retry.phase
                     self._attach_action_metadata(retried, action)
                     retried.metadata["workspace_grant"] = grant.path
                     retried.metadata["workspace_grant_scope"] = grant.scope
@@ -392,13 +398,20 @@ class ActionFlow:
                     success=result.success,
                     error_code=result.error_code,
                 )
-            return result, action_id
+            return result, action_id, phase
         finally:
             if progress_handle is not None:
                 if result is None:
                     self.environment.progress_reporter.tool_aborted(progress_handle)
                 else:
                     self.environment.progress_reporter.tool_finished(progress_handle, action, result)
+
+    def _call_tool(self, action, *, cwd, allowed_roots) -> ToolExecution:
+        tools = self.environment.tools
+        execute_tracked = getattr(tools, "execute_tracked", None)
+        if callable(execute_tracked):
+            return execute_tracked(action, cwd=cwd, allowed_roots=allowed_roots)
+        return ToolExecution(tools.execute(action, cwd=cwd, allowed_roots=allowed_roots))
 
     def _workspace_grant_path(self, result: ToolResult) -> str | None:
         raw_path = result.metadata.get("resolved_path") or result.metadata.get("path")

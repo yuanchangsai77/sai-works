@@ -8,7 +8,7 @@ from ..types import ToolAction, ToolResult
 class ActionJournal(Protocol):
     def start(self, action: ToolAction, workspace_root: str, risk_level: str) -> str | None: ...
 
-    def finish(self, action_id: str, result: ToolResult) -> None: ...
+    def finish(self, action_id: str, result: ToolResult, *, known_not_started: bool = False) -> None: ...
 
 
 class TaskActionJournal:
@@ -25,5 +25,5 @@ class TaskActionJournal:
             workspace_root, risk_level,
         )
 
-    def finish(self, action_id: str, result: ToolResult) -> None:
-        self.store.finish_action(action_id, success=result.success, error_code=result.error_code)
+    def finish(self, action_id: str, result: ToolResult, *, known_not_started: bool = False) -> None:
+        self.store.finish_action(action_id, success=result.success, error_code=result.error_code, known_not_started=known_not_started)

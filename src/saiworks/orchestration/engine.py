@@ -164,49 +164,71 @@ class ExecutionEngine:
     def execute_in_context(self, request: UserRequest, context: ExecutionContext) -> ExecutionSummary:
         if not self._execution_lock.acquire(blocking=False):
             raise RuntimeError("Execution engine is already running")
-        self._execution_context = context
-        self._run_state = RunState(started_at=time.monotonic())
-        context.tools = self.tools
-        context.session = None
-        context.tools_closed = False
-        context.terminal_summary = None
-        context.approval_wait_seconds = 0.0
-        self.last_failure_summary = None
         try:
-            self._raise_if_cancelled()
-            return self._execute(request)
-        except KeyboardInterrupt:
-            session = self.current_session
-            summary = ExecutionSummary(
-                final_message="Interrupted",
-                tool_results=list(session.tool_results) if session is not None else [],
-                outcome="interrupted",
-                checkpoint=session.checkpoint if session is not None else self._initial_checkpoint(request),
-            )
-            self.cancel_current_run()
-            self.last_failure_summary = self._finish(summary)
-            raise
-        except Exception as error:
-            self.last_failure_summary = self._finish(self._runtime_failure_summary(error))
-            raise
+            with self._tool_cleanup_lock:
+                self._execution_context = context
+                self._run_state = RunState(started_at=time.monotonic())
+                context.tools = self.tools
+                context.session = None
+                context.tools_closed = False
+                context.terminal_summary = None
+                context.approval_wait_seconds = 0.0
+                self.last_failure_summary = None
+            try:
+                self._raise_if_cancelled()
+                return self._execute(request)
+            except KeyboardInterrupt:
+                session = self.current_session
+                summary = ExecutionSummary(
+                    final_message="Interrupted",
+                    tool_results=list(session.tool_results) if session is not None else [],
+                    outcome="interrupted",
+                    checkpoint=session.checkpoint if session is not None else self._initial_checkpoint(request),
+                )
+                self.cancel_current_run()
+                self.last_failure_summary = self._finish(summary)
+                raise
+            except Exception as error:
+                self.last_failure_summary = self._finish(self._runtime_failure_summary(error))
+                raise
         finally:
             self._execution_lock.release()
 
     def cancel_current_run(self) -> None:
-        """Cancel the current execution context, preserving facts for terminalization."""
-        context = self._execution_context
-        if context.cancellation.is_set() and self._run_state.tools_closed:
-            return
+        with self._tool_cleanup_lock:
+            self.cancel_execution(self._execution_context)
+
+    def cancel_execution(self, context: ExecutionContext) -> None:
+        """Only the bound context may interrupt and clean up its resources."""
         context.cancellation.set()
-        self._tool_state_session_key = None
-        self._close_execution_tools()
+        with self._tool_cleanup_lock:
+            if self._execution_context is not context:
+                return
+            if self._run_state.tools_closed:
+                return
+            self._tool_state_session_key = None
+            self._close_execution_tools()
+
+    def close_tool_state(self) -> None:
+        """Idle-only session cleanup, serialized with execution ownership."""
+        if not self._execution_lock.acquire(blocking=False):
+            raise RuntimeError("Cannot close tool state while execution is running")
+        try:
+            with self._tool_cleanup_lock:
+                reset = getattr(self.tools, "reset_state", None)
+                if callable(reset):
+                    reset()
+                self._tool_state_session_key = None
+        finally:
+            self._execution_lock.release()
 
     def _close_execution_tools(self) -> None:
         with self._tool_cleanup_lock:
             context = self._execution_context
             if self._run_state.tools_closed:
                 return
-            reset_state = getattr(self.tools, "reset_state", None)
+            owned_tools = context.tools if context.tools is not None else self.tools
+            reset_state = getattr(owned_tools, "reset_state", None)
             try:
                 if callable(reset_state):
                     reset_state()
@@ -730,16 +752,17 @@ class ExecutionEngine:
             self.capability_warehouse.restore_capabilities(active_capability_ids)
 
     def _prepare_tool_state(self, session_key: str | None) -> None:
-        reset_state = getattr(self.tools, "reset_state", None)
-        if not callable(reset_state):
-            return
-        if session_key is None:
-            reset_state()
-            self._tool_state_session_key = None
-            return
-        if self._tool_state_session_key != session_key:
-            reset_state()
-            self._tool_state_session_key = session_key
+        with self._tool_cleanup_lock:
+            reset_state = getattr(self.tools, "reset_state", None)
+            if not callable(reset_state):
+                return
+            if session_key is None:
+                reset_state()
+                self._tool_state_session_key = None
+                return
+            if self._tool_state_session_key != session_key:
+                reset_state()
+                self._tool_state_session_key = session_key
 
     def _all_non_retryable(self, results: list[ToolResult]) -> bool:
         return all(

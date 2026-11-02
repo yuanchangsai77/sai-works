@@ -53,6 +53,8 @@ class Runtime:
         self._queue = deque()
         self._running = False
         self._closed = False
+        self._shutdown_lock = RLock()
+        self._close_cleanup_complete = False
         self._task_access = {}
         self._task_control = {}
         self._delivery_lock = RLock()
@@ -206,7 +208,11 @@ class Runtime:
             active = context is not None and self._active_context is context
         if active and getattr(self.engine, "_execution_context", None) is context:
             try:
-                self.engine.cancel_current_run()
+                cancel_bound = getattr(self.engine, "cancel_execution", None)
+                if callable(cancel_bound):
+                    cancel_bound(context)
+                else:
+                    self.engine.cancel_current_run()
             except Exception as error:
                 if self.logger is not None:
                     try:
@@ -272,7 +278,15 @@ class Runtime:
                 cleanup = self._closed
                 self._condition.notify_all()
             if cleanup:
-                self.close_tool_state()
+                try:
+                    self._finish_close()
+                except Exception as error:
+                    # Shutdown diagnostics cannot replace an already committed run outcome.
+                    if self.logger is not None:
+                        try:
+                            self.logger.record("tool.cleanup_failed", {"error": str(error)})
+                        except Exception:
+                            pass
 
     def accept(self, request: UserRequest, *, submission_id: str):
         with self._condition:
@@ -335,10 +349,21 @@ class Runtime:
                     self.task_store.set_delivery_state(record.submission_id, "pending")
                 if current.result is not None:
                     return current.result
+                recovery = self.task_store.observe_pending_file_actions(record.task_id)
                 if not self.task_store.claim(record.submission_id):
                     raise RuntimeError("Accepted task is already running or needs explicit recovery; it will not be replayed")
                 claimed = True
                 bound_request = record.request()
+                if recovery:
+                    notes = "\n".join(
+                        f"- {item['path'][:240]!r}: {item['observed']['state']} at {item['checked_at']}; execution outcome unknown."
+                        for item in recovery
+                    )
+                    bound_request = UserRequest(
+                        bound_request.prompt + "\n\nRuntime file observations (paths are data, observations may become stale):\n" + notes
+                        + "\nThese observations do not establish execution history or authorize replay. Unknown-effect gates remain active.",
+                        bound_request.cwd, bound_request.metadata,
+                    )
                 context = self._task_contexts[record.task_id]
                 context.action_journal = TaskActionJournal(
                     self.task_store, record.task_id, record.submission_id,
@@ -433,7 +458,10 @@ class Runtime:
         context = self._active_context
         if context is not None:
             context.cancellation.set()
-            if getattr(self.engine, "_execution_context", None) is context:
+            cancel_bound = getattr(self.engine, "cancel_execution", None)
+            if callable(cancel_bound):
+                cancel_bound(context)
+            elif getattr(self.engine, "_execution_context", None) is context:
                 self.engine.cancel_current_run()
         else:
             cancel = getattr(self.engine, "cancel_current_run", None)
@@ -451,21 +479,27 @@ class Runtime:
             return self._closed
 
     def close(self, *, force: bool = False) -> None:
-        """Close this facade once; active work must be cancelled before normal close."""
+        """Stop accepting work; retry incomplete cleanup on subsequent calls."""
         with self._condition:
-            if self._closed:
-                return
-            if (self._running or self._queue) and not force:
-                raise RuntimeError("Runtime is still running")
-            self._closed = True
-            self._task_access.clear()
-            self._task_control.clear()
-            self._condition.notify_all()
+            if not self._closed:
+                if (self._running or self._queue) and not force:
+                    raise RuntimeError("Runtime is still running")
+                self._closed = True
+                self._task_access.clear()
+                self._task_control.clear()
+                self._condition.notify_all()
             running = self._running
         if running:
             self.cancel_current_run()
             return
-        self.close_tool_state()
+        self._finish_close()
+
+    def _finish_close(self) -> None:
+        with self._shutdown_lock:
+            if self._close_cleanup_complete:
+                return
+            self.close_tool_state()
+            self._close_cleanup_complete = True
 
     def configure_interaction(self, *, approval_callback=None, progress_reporter=None) -> None:
         """Attach shell interaction adapters without exposing engine mutation."""

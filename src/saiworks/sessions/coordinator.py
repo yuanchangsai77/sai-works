@@ -49,6 +49,10 @@ class SessionCoordinator:
         return self.runtime.subagent_coordinator
 
     def close_tool_state(self) -> None:
+        close = getattr(self.engine, "close_tool_state", None)
+        if callable(close):
+            close()
+            return
         reset = getattr(getattr(self.engine, "tools", None), "reset_state", None)
         if callable(reset):
             reset()
@@ -147,10 +151,7 @@ class SessionCoordinator:
                 )
         finally:
             if close_runtime:
-                tools = getattr(self.engine, "tools", None)
-                reset_state = getattr(tools, "reset_state", None)
-                if callable(reset_state):
-                    reset_state()
+                self.close_tool_state()
 
     @staticmethod
     def _apply_workspace_summary(session, summary) -> None:
