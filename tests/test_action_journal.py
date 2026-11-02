@@ -43,7 +43,7 @@ def test_unknown_effect_is_not_replayed_by_following_submission(tmp_path):
     assert reopened.start_action("task", "two", "read_file", {"path": "a.py"}, str(tmp_path), "read") is None
     assert len(reopened.unknown_actions("task")) == 1
     reopened.finish("two", ExecutionSummary("still unknown", [], outcome="runtime_error"))
-    reopened.resolve_action(action_id, effect_state="not_performed")
+    reopened.resolve_action(action_id, effect_state="not_performed", actor="test-owner", evidence={"check": "external state verified"})
     third = reopened.accept(UserRequest("retry", str(tmp_path)), submission_id="three", task_id="task")
     assert reopened.claim(third.submission_id)
     retry_id = reopened.start_action("task", "three", "patch", {"path": "a.py"}, str(tmp_path), "write")
@@ -57,7 +57,7 @@ def test_confirmed_effect_cannot_be_replayed(tmp_path):
     assert store.claim("one")
     action_id = store.start_action(record.task_id, "one", "patch", {"path": "a.py"}, str(tmp_path), "write")
     store.finish("one", ExecutionSummary("unknown", [], outcome="runtime_error"))
-    store.resolve_action(action_id, effect_state="performed")
+    store.resolve_action(action_id, effect_state="performed", actor="test-owner", evidence={"check": "external state verified"})
     second = store.accept(UserRequest("retry", str(tmp_path)), submission_id="two", task_id=record.task_id)
     assert store.claim(second.submission_id)
     with pytest.raises(RuntimeError, match="confirmed performed"):
@@ -131,7 +131,7 @@ def test_started_action_keeps_redacted_reconciliation_facts_across_v4_upgrade(tm
     assert "supersecret" not in str(unknown)
     assert "[REDACTED]" in str(unknown)
     with sqlite3.connect(path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 5
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
 
 
 def test_admission_log_failure_leaves_durable_reconciliation_summary(tmp_path, monkeypatch):
@@ -215,9 +215,9 @@ def test_reconciliation_requires_no_running_submission_and_stable_command_identi
     assert store.claim("one")
     action_id = store.start_action(record.task_id, "one", action_name, {"command": "send", "timeout": 1}, str(tmp_path), "execute")
     with pytest.raises(RuntimeError, match="still running"):
-        store.resolve_action(action_id, effect_state="not_performed")
+        store.resolve_action(action_id, effect_state="not_performed", actor="test-owner", evidence={"check": "external state verified"})
     store.finish("one", ExecutionSummary("unknown", [], outcome="runtime_error"))
-    store.resolve_action(action_id, effect_state="performed")
+    store.resolve_action(action_id, effect_state="performed", actor="test-owner", evidence={"check": "external state verified"})
     second = store.accept(UserRequest("retry", str(tmp_path)), submission_id="two", task_id=record.task_id)
     assert store.claim(second.submission_id)
     with pytest.raises(RuntimeError, match="confirmed performed"):

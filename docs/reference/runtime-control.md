@@ -24,4 +24,4 @@ Runtime 的可信装配方调用 `grant_task_control(task_id, permissions, actor
 
 ## 数据兼容
 
-任务库增量升级到 user_version=5；v3 的 approvals 与 task_cancellations 表保留，v4 的内部 action_attempts 表增加脱敏参数摘要列；旧 v1/v2/v3/v4 库在同一升级事务内迁移，升级事务失败保持原库可用，新程序拒绝未知数据库版本。升级前必须停止旧写入进程，不能并行使用旧程序写任务库；不承诺旧程序只读回退。Session JSON、ExecutionSummary、工具及模型格式不变；引擎同步审批路径保持不变。
+任务库增量升级到 user_version=8；v3 的 approvals 与 task_cancellations 表保留，v4 新增内部 action_attempts 表，v5 增加脱敏参数摘要列；v6 新增内部文件恢复描述与核对证据列；v7 增加追加式观察与裁决证据表；v8 增加领取者身份及未启动动作的崩溃回收证据；旧 v1/v2/v3/v4/v5/v6/v7 库在同一升级事务内迁移，升级事务失败保持原库可用，新程序拒绝未知数据库版本。升级前必须停止旧写入进程，不能并行使用旧程序写任务库；不承诺旧程序只读回退。Session JSON、ExecutionSummary、工具及模型格式不变；引擎同步审批路径保持不变。
