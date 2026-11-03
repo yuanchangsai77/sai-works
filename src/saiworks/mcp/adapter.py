@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import nullcontext
 import hashlib
 import json
 import re
@@ -99,6 +100,11 @@ class MCPToolAdapter:
 
         def handler(action: ToolAction, _context: ToolContext) -> ToolResult:
             started = time.monotonic()
+            resource_guard = getattr(_context, "resource_guard", None)
+            guard = resource_guard() if callable(resource_guard) else nullcontext()
+            with guard:
+                capture = getattr(self.manager, "capture_generation", None)
+                generation = capture() if callable(capture) else None
             if self.logger is not None:
                 self.logger.record("mcp.tool.call", {
                     "server_name": self.server.name,
@@ -109,7 +115,11 @@ class MCPToolAdapter:
                     "risk_overridden": descriptor.tool_name in self.server.risk_overrides,
                 })
             try:
-                result = self.manager.call_tool(self.server.name, descriptor.tool_name, action.arguments)
+                if generation is None:
+                    result = self.manager.call_tool(self.server.name, descriptor.tool_name, action.arguments)
+                else:
+                    result = self.manager.call_tool(self.server.name, descriptor.tool_name, action.arguments,
+                                                    expected_generation=generation)
             except Exception as exc:
                 result = MCPToolCallResult(
                     content=str(exc),

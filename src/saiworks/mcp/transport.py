@@ -11,10 +11,12 @@ import time
 from collections import deque
 from dataclasses import dataclass, field
 from itertools import count
+from functools import wraps
 from typing import Any, Protocol
 from urllib.parse import SplitResult, urljoin, urlsplit
 
 from .config import MCPServerConfig
+from ..tools.process_lifecycle import OwnedProcess, supports_process_groups
 
 
 MAX_MCP_MESSAGE_BYTES = 10 * 1024 * 1024
@@ -116,9 +118,46 @@ def _read_bounded_body(response: http.client.HTTPResponse, config: MCPServerConf
             raise _message_too_large(config, total)
 
 
+def _serialize_exchange(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        with self._exchange_lock:
+            with self._lifecycle_lock:
+                if self._permanently_closed:
+                    raise MCPTransportClosed(f"MCP transport is closed for server '{self.config.name}'")
+            return method(self, *args, **kwargs)
+    return guarded
+
+
+def _open_transport(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        with self._lifecycle_lock:
+            if self._permanently_closed:
+                raise MCPTransportClosed(f"MCP transport is closed for server '{self.config.name}'")
+            return method(self, *args, **kwargs)
+    return guarded
+
+
+def _close_transport(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        with self._lifecycle_lock:
+            self._permanently_closed = True
+            responses = getattr(self, "_responses", None)
+            if responses is not None:
+                _queue_jsonrpc_response(responses, {"jsonrpc": "2.0", "id": None,
+                                                   "error": {"message": "transport closed"}})
+            return method(self, *args, **kwargs)
+    return guarded
+
+
 @dataclass(slots=True)
 class StreamableHttpTransport:
     config: MCPServerConfig
+    _lifecycle_lock: object = field(default_factory=threading.RLock, init=False, repr=False)
+    _exchange_lock: object = field(default_factory=threading.RLock, init=False, repr=False)
+    _permanently_closed: bool = field(default=False, init=False)
     _parsed_url: SplitResult = field(init=False)
     _connection: http.client.HTTPConnection | http.client.HTTPSConnection | None = field(default=None, init=False)
     _request_ids: count = field(default_factory=lambda: count(1), init=False)
@@ -133,6 +172,7 @@ class StreamableHttpTransport:
         if not self._parsed_url.netloc:
             raise UnsupportedMCPTransport(f"Missing MCP endpoint host for server '{self.config.name}'")
 
+    @_open_transport
     def connect(self) -> None:
         if self._connection is not None:
             return
@@ -149,13 +189,22 @@ class StreamableHttpTransport:
                 self._parsed_url.port,
                 timeout=self.config.timeout,
             )
+            self._connection = connection
             connection.connect()
         except socket.timeout as exc:
+            try:
+                self._drop_connection()
+            except Exception:
+                pass  # Keep the reference when close fails; manager cleanup retries.
             raise MCPTransportTimeout(
                 f"MCP connection timed out for server '{self.config.name}'",
                 metadata={"server_name": self.config.name, "transport": self.config.transport},
             ) from exc
         except OSError as exc:
+            try:
+                self._drop_connection()
+            except Exception:
+                pass
             raise MCPTransportConnectFailed(
                 f"MCP connection failed for server '{self.config.name}': {exc}",
                 metadata={"server_name": self.config.name, "transport": self.config.transport},
@@ -163,7 +212,13 @@ class StreamableHttpTransport:
 
         self._connection = connection
 
+    @_close_transport
     def close(self) -> None:
+        self._drop_connection()
+        self.session_id = None
+
+    @_open_transport
+    def reset_session(self) -> None:
         self._drop_connection()
         self.session_id = None
 
@@ -172,6 +227,7 @@ class StreamableHttpTransport:
             self._connection.close()
         self._connection = None
 
+    @_serialize_exchange
     def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = {
             "jsonrpc": "2.0",
@@ -182,6 +238,7 @@ class StreamableHttpTransport:
             payload["params"] = params
         return self._send(payload, expect_response=True)
 
+    @_serialize_exchange
     def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         payload = {
             "jsonrpc": "2.0",
@@ -206,8 +263,12 @@ class StreamableHttpTransport:
             headers["Mcp-Session-Id"] = self.session_id
 
         try:
-            self._connection.request("POST", self._target_path, body=body, headers=headers)
-            response = self._connection.getresponse()
+            with self._lifecycle_lock:
+                if self._permanently_closed or self._connection is None:
+                    raise MCPTransportClosed("MCP connection closed before request dispatch")
+                connection = self._connection
+                connection.request("POST", self._target_path, body=body, headers=headers)
+            response = connection.getresponse()
         except socket.timeout as exc:
             self.close()
             raise MCPTransportTimeout(
@@ -227,7 +288,9 @@ class StreamableHttpTransport:
                 metadata={"server_name": self.config.name, "transport": self.config.transport},
             ) from exc
 
-        self.session_id = response.getheader("Mcp-Session-Id") or self.session_id
+        with self._lifecycle_lock:
+            if not self._permanently_closed:
+                self.session_id = response.getheader("Mcp-Session-Id") or self.session_id
         content_type = response.getheader("Content-Type", "")
         media_type = content_type.split(";", 1)[0].strip().lower()
         if response.status < 400 and expect_response and media_type == "text/event-stream":
@@ -461,6 +524,10 @@ def _select_jsonrpc_response(payload: Any, *, request_id: object) -> dict[str, A
 @dataclass(slots=True)
 class StdioTransport:
     config: MCPServerConfig
+    _lifecycle_lock: object = field(default_factory=threading.RLock, init=False, repr=False)
+    _exchange_lock: object = field(default_factory=threading.RLock, init=False, repr=False)
+    _permanently_closed: bool = field(default=False, init=False)
+    _process_owner: OwnedProcess | None = field(default=None, init=False)
     _process: subprocess.Popen[bytes] | None = field(default=None, init=False)
     _request_ids: count = field(default_factory=lambda: count(1), init=False)
     _responses: "queue.Queue[dict[str, Any]]" = field(
@@ -472,6 +539,7 @@ class StdioTransport:
     _stderr_tail: deque[str] = field(default_factory=lambda: deque(maxlen=20), init=False)
     _closing: bool = field(default=False, init=False)
 
+    @_open_transport
     def connect(self) -> None:
         if self._process is not None:
             return
@@ -483,6 +551,7 @@ class StdioTransport:
         if self.config.env:
             merged_env = {**os.environ, **self.config.env}
 
+        owns_group = supports_process_groups()
         try:
             process = subprocess.Popen(
                 [self.config.command, *self.config.args],
@@ -490,6 +559,7 @@ class StdioTransport:
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 env=merged_env,
+                start_new_session=owns_group,
             )
         except FileNotFoundError as exc:
             raise MCPTransportConnectFailed(
@@ -503,25 +573,24 @@ class StdioTransport:
             ) from exc
 
         self._process = process
+        self._process_owner = OwnedProcess(process, owns_group=owns_group)
         self._reader_thread = threading.Thread(target=self._read_stdout_loop, daemon=True)
         self._stderr_thread = threading.Thread(target=self._read_stderr_loop, daemon=True)
         self._reader_thread.start()
         self._stderr_thread.start()
 
+    @_close_transport
     def close(self) -> None:
         self._closing = True
         process = self._process
-        self._process = None
         if process is None:
             return
-        if process.poll() is None:
-            process.terminate()
-            try:
-                process.wait(timeout=1)
-            except subprocess.TimeoutExpired:
-                process.kill()
-                process.wait(timeout=1)
+        if self._process_owner is None:
+            raise RuntimeError("MCP process owner is unavailable")
+        self._process_owner.close(grace=1)
+        self._process = None
 
+    @_serialize_exchange
     def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         request_id = next(self._request_ids)
         payload = {
@@ -534,6 +603,7 @@ class StdioTransport:
         self._write_message(payload)
         return self._wait_for_response(request_id)
 
+    @_serialize_exchange
     def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         payload = {
             "jsonrpc": "2.0",
@@ -545,16 +615,15 @@ class StdioTransport:
 
     def _write_message(self, payload: dict[str, Any]) -> None:
         self.connect()
-        if self._process is None or self._process.stdin is None:
-            raise MCPTransportClosed(
-                f"MCP stdio transport is unavailable for server '{self.config.name}'",
-                metadata={"server_name": self.config.name, "transport": self.config.transport},
-            )
+        with self._lifecycle_lock:
+            process = self._process
+            if self._permanently_closed or process is None or process.stdin is None:
+                raise MCPTransportClosed(f"MCP stdio transport is unavailable for server '{self.config.name}'")
 
         message = json.dumps(payload, separators=(",", ":")).encode("utf-8") + b"\n"
         try:
-            self._process.stdin.write(message)
-            self._process.stdin.flush()
+            process.stdin.write(message)
+            process.stdin.flush()
         except BrokenPipeError as exc:
             raise MCPTransportClosed(
                 self._closed_message("stdin pipe closed"),
@@ -565,15 +634,17 @@ class StdioTransport:
         deadline = time.monotonic() + self.config.read_timeout
         pending: list[dict[str, Any]] = []
         while True:
+            if self._permanently_closed:
+                raise MCPTransportClosed(f"MCP transport closed for server '{self.config.name}'")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise MCPTransportReadTimeout(
                     f"MCP stdio response read timed out for server '{self.config.name}'",
                     metadata={"server_name": self.config.name, "transport": self.config.transport},
                 )
-            if self._process is not None and self._process.poll() is not None:
+            if self._process_owner is not None and self._process_owner.leader_exited():
                 raise MCPTransportClosed(
-                    self._closed_message(f"process exited with code {self._process.returncode}"),
+                    self._closed_message("process exited"),
                     metadata={"server_name": self.config.name, "transport": self.config.transport, "stderr": list(self._stderr_tail)},
                 )
             try:
@@ -684,6 +755,9 @@ class StdioTransport:
 @dataclass(slots=True)
 class SSETransport:
     config: MCPServerConfig
+    _lifecycle_lock: object = field(default_factory=threading.RLock, init=False, repr=False)
+    _exchange_lock: object = field(default_factory=threading.RLock, init=False, repr=False)
+    _permanently_closed: bool = field(default=False, init=False)
     _parsed_url: SplitResult = field(init=False)
     _stream_connection: http.client.HTTPConnection | http.client.HTTPSConnection | None = field(default=None, init=False)
     _stream_response: http.client.HTTPResponse | Any | None = field(default=None, init=False)
@@ -696,6 +770,7 @@ class SSETransport:
     _endpoint_ready: threading.Event = field(default_factory=threading.Event, init=False)
     _message_endpoint: str | None = field(default=None, init=False)
     _closing: bool = field(default=False, init=False)
+    _post_connections: list = field(default_factory=list, init=False)
     _connect_error: MCPTransportError | None = field(default=None, init=False)
 
     def __post_init__(self) -> None:
@@ -707,22 +782,32 @@ class SSETransport:
         if not self._parsed_url.netloc:
             raise UnsupportedMCPTransport(f"Missing MCP SSE endpoint host for server '{self.config.name}'")
 
+    @_open_transport
     def connect(self) -> None:
         if self._stream_connection is not None:
             return
         self._closing = False
         self._connect_error = None
         connection = self._build_connection(self._parsed_url, timeout=self.config.timeout)
+        self._stream_connection = connection
         try:
             connection.connect()
             connection.request("GET", self._target_path(self._parsed_url), headers={"Accept": "text/event-stream", **self.config.headers})
             response = connection.getresponse()
         except socket.timeout as exc:
+            try:
+                self.close()
+            except Exception:
+                pass
             raise MCPTransportTimeout(
                 f"MCP SSE connect timed out for server '{self.config.name}'",
                 metadata={"server_name": self.config.name, "transport": self.config.transport},
             ) from exc
         except OSError as exc:
+            try:
+                self.close()
+            except Exception:
+                pass
             raise MCPTransportConnectFailed(
                 f"MCP SSE connect failed for server '{self.config.name}': {exc}",
                 metadata={"server_name": self.config.name, "transport": self.config.transport},
@@ -757,16 +842,30 @@ class SSETransport:
             self.close()
             raise error
 
+    @_close_transport
     def close(self) -> None:
         self._closing = True
+        errors = []
+        for connection in tuple(self._post_connections):
+            try:
+                connection.close()
+                self._post_connections.remove(connection)
+            except Exception as error:
+                errors.append(error)
         if self._stream_connection is not None:
-            self._stream_connection.close()
-        self._stream_connection = None
-        self._stream_response = None
+            try:
+                self._stream_connection.close()
+                self._stream_connection = None
+                self._stream_response = None
+            except Exception as error:
+                errors.append(error)
         self._message_endpoint = None
         self._connect_error = None
         self._endpoint_ready.clear()
+        if errors:
+            raise ExceptionGroup("MCP SSE cleanup failed", errors)
 
+    @_serialize_exchange
     def request(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         request_id = next(self._request_ids)
         payload = {"jsonrpc": "2.0", "id": request_id, "method": method}
@@ -775,6 +874,7 @@ class SSETransport:
         self._post_message(payload)
         return self._wait_for_response(request_id)
 
+    @_serialize_exchange
     def notify(self, method: str, params: dict[str, Any] | None = None) -> None:
         payload = {"jsonrpc": "2.0", "method": method}
         if params is not None:
@@ -793,8 +893,12 @@ class SSETransport:
         body = json.dumps(payload).encode("utf-8")
         headers = {"Accept": "application/json", "Content-Type": "application/json", **self.config.headers}
         try:
-            connection.connect()
-            connection.request("POST", self._target_path(endpoint), body=body, headers=headers)
+            with self._lifecycle_lock:
+                if self._permanently_closed:
+                    raise MCPTransportClosed("MCP SSE transport closed before request dispatch")
+                self._post_connections.append(connection)
+                connection.connect()
+                connection.request("POST", self._target_path(endpoint), body=body, headers=headers)
             response = connection.getresponse()
             response_body = _read_bounded_body(response, self.config).decode("utf-8", errors="replace").strip()
         except socket.timeout as exc:
@@ -811,6 +915,9 @@ class SSETransport:
             ) from exc
         finally:
             connection.close()
+            with self._lifecycle_lock:
+                if connection in self._post_connections:
+                    self._post_connections.remove(connection)
 
         if response.status >= 400:
             raise MCPHTTPError(
@@ -833,6 +940,8 @@ class SSETransport:
         deadline = time.monotonic() + self.config.read_timeout
         pending: list[dict[str, Any]] = []
         while True:
+            if self._permanently_closed:
+                raise MCPTransportClosed(f"MCP transport closed for server '{self.config.name}'")
             remaining = deadline - time.monotonic()
             if remaining <= 0:
                 raise MCPTransportReadTimeout(

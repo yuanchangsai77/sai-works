@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from functools import wraps
 from typing import Any, Protocol
+from threading import RLock
 
 from .. import __version__
 from .config import MCPServerConfig
@@ -49,6 +51,16 @@ class MCPClientError(RuntimeError):
         self.metadata = metadata or {}
 
 
+def _client_operation(method):
+    @wraps(method)
+    def guarded(self, *args, **kwargs):
+        with self._initialize_lock:
+            with self._lifecycle_lock:
+                self._ensure_open()
+            return method(self, *args, **kwargs)
+    return guarded
+
+
 @dataclass(slots=True)
 class TransportBackedMCPClient:
     config: MCPServerConfig
@@ -58,36 +70,49 @@ class TransportBackedMCPClient:
     server_info: dict[str, Any] = field(default_factory=dict)
     protocol_version: str = DEFAULT_PROTOCOL_VERSION
     max_tools_per_server: int = MAX_MCP_TOOLS_PER_SERVER
+    _closed: bool = field(default=False, init=False)
+    _initialize_lock: object = field(default_factory=RLock, init=False, repr=False)
+    _lifecycle_lock: object = field(default_factory=RLock, init=False, repr=False)
+
+    def _ensure_open(self) -> None:
+        if self._closed:
+            raise MCPClientError("MCP client is closed", error_code="mcp_transport_closed")
 
     def initialize(self) -> None:
-        if self.initialized:
-            return
+        with self._initialize_lock:
+            with self._lifecycle_lock:
+                self._ensure_open()
+            if self.initialized:
+                return
 
-        self.transport.connect()
-        response = self.transport.request(
-            "initialize",
-            {
-                "protocolVersion": self.protocol_version,
-                "capabilities": {},
-                "clientInfo": dict(CLIENT_INFO),
-            },
-        )
-        result = _extract_result(response)
-        self.server_capabilities = _object_value(result, "capabilities")
-        self.server_info = _object_value(result, "serverInfo")
-        server_protocol = result.get("protocolVersion")
-        if not isinstance(server_protocol, str) or server_protocol.strip() not in SUPPORTED_PROTOCOL_VERSIONS:
-            self.transport.close()
-            reported_version = server_protocol.strip() if isinstance(server_protocol, str) else ""
-            raise MCPClientError(
-                f"MCP server returned unsupported protocol version '{reported_version or 'missing'}'",
-                error_code="mcp_protocol_error",
-                metadata={"protocol_version": reported_version or None},
+            self.transport.connect()
+            response = self.transport.request(
+                "initialize",
+                {
+                    "protocolVersion": self.protocol_version,
+                    "capabilities": {},
+                    "clientInfo": dict(CLIENT_INFO),
+                },
             )
-        self.protocol_version = server_protocol.strip()
-        self.transport.notify("notifications/initialized", {})
-        self.initialized = True
+            result = _extract_result(response)
+            self.server_capabilities = _object_value(result, "capabilities")
+            self.server_info = _object_value(result, "serverInfo")
+            server_protocol = result.get("protocolVersion")
+            if not isinstance(server_protocol, str) or server_protocol.strip() not in SUPPORTED_PROTOCOL_VERSIONS:
+                self.transport.close()
+                reported_version = server_protocol.strip() if isinstance(server_protocol, str) else ""
+                raise MCPClientError(
+                    f"MCP server returned unsupported protocol version '{reported_version or 'missing'}'",
+                    error_code="mcp_protocol_error",
+                    metadata={"protocol_version": reported_version or None},
+                )
+            self.protocol_version = server_protocol.strip()
+            self.transport.notify("notifications/initialized", {})
+            with self._lifecycle_lock:
+                self._ensure_open()
+                self.initialized = True
 
+    @_client_operation
     def list_tools(self) -> tuple[MCPToolDescriptor, ...]:
         self.initialize()
         if "tools" not in self.server_capabilities:
@@ -125,6 +150,7 @@ class TransportBackedMCPClient:
             )
         return tuple(tools)
 
+    @_client_operation
     def call_tool(self, tool_name: str, arguments: dict) -> MCPToolCallResult:
         self.initialize()
         try:
@@ -166,6 +192,7 @@ class TransportBackedMCPClient:
             error_code="mcp_tool_call_failed" if bool(result.get("isError", False)) else None,
         )
 
+    @_client_operation
     def list_resources(self) -> tuple[MCPResourceDescriptor, ...]:
         self.initialize()
         if "resources" not in self.server_capabilities:
@@ -196,6 +223,7 @@ class TransportBackedMCPClient:
             )
         return tuple(resources)
 
+    @_client_operation
     def read_resource(self, resource_id: str) -> str:
         self.initialize()
         if "resources" not in self.server_capabilities:
@@ -222,7 +250,11 @@ class TransportBackedMCPClient:
         except MCPHTTPError as exc:
             if exc.metadata.get("http_status") != 404:
                 raise
-            self.transport.close()
+            reset = getattr(self.transport, "reset_session", None)
+            if callable(reset):
+                reset()
+            else:
+                self.transport.close()
             self.initialized = False
             if not retry_on_session_expiry:
                 raise
@@ -271,8 +303,10 @@ class TransportBackedMCPClient:
         )
 
     def close(self) -> None:
+        with self._lifecycle_lock:
+            self._closed = True
+            self.initialized = False
         self.transport.close()
-        self.initialized = False
 
 
 @dataclass(slots=True)
