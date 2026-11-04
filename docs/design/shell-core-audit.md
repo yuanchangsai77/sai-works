@@ -1,6 +1,6 @@
 # 壳与内核拆分：阶段核对与实施证据
 
-历史基线日期：2026-10-01。设计基线提交：e70e525。A 核对完成，B/C 的同进程职责迁移与 R1–R3 可靠性验收完成。2026-10-10 新增 D1 同进程任务观察，证据见第 5 节；2026-10-15 完成 D2 批次①（审批记录与控制资格），证据见第 6 节；D2 其余批次与 D3/E/F 未实施。无网络 API、无常驻续跑或断线审批承诺。
+历史基线日期：2026-10-01。设计基线提交：e70e525。A 核对完成，B/C 的同进程职责迁移与 R1–R3 可靠性验收完成。2026-10-10 新增 D1 同进程任务观察，证据见第 5 节；2026-10-15 完成 D2 批次①（审批记录与控制资格），证据见第 6 节；后续已增加取消桥接与恢复门禁，2026-11-04 复核见第 7 节。D2 审批挂起/续跑与 D3/E/F 未实施。无网络 API、无常驻续跑或断线审批承诺。第 1–6 节保留各阶段当时的范围与测试结果，不代表最新待办。
 
 ## 1. 规范与设计审查
 
@@ -71,3 +71,15 @@ B/C 相关套件：headless runtime、engine/session/CLI、subagent、CLI entryp
 新增 15 项行为测试（tests/test_runtime_approval_control.py）：指纹绑定与修订递增、批准/拒绝生命周期与幂等冲突、过期拒绝与重请求新身份、取消幂等与迟到决定、已提交裁决免疫后续取消、decide/cancel 双线程竞争、资格矩阵与跨任务拒绝、畸形句柄、关闭后全部拒绝、v2→v3 升级与未知版本拒绝、未知审批状态拒绝、配置默认值/覆盖/越界、审批记录不影响执行摘要。
 
 验证命令：`PYTHONPATH=src ./.venv/Scripts/python.exe -m pytest tests/test_runtime_approval_control.py tests/test_runtime_observation.py tests/test_headless_runtime.py tests/test_desktop_controller.py tests/test_app_cli_entrypoint_dispatch.py tests/test_runtime_config_loading.py -q`，97 项通过（Windows）。另在 WSL 原生副本运行全量：646 项通过、6 项失败，失败集合与第 3 节记录的基线完全相同（显式上下文/工作区摘要布局 2 项、模型工作集旧断言 3 项、TUI 补全数量 1 项），已在独立工作树检出 HEAD 复现确认属既有失败，不作为本轮回归。WSL 副本经白名单进程打包后解包获得，绕开了 DLP 透明加密导致的 /mnt/d 密文读取问题。
+
+## 7. 进度复核（2026-11-04）
+
+对照当前实现与最近提交，修正总览仍将 Task 取消桥接列为未实现的过时描述。当前已经具备活动 Run 取消桥接、动作启动排序、未知副作用恢复门禁，以及关闭失败后的资源清理重试。审批记录和 TTL 不等于引擎已支持挂起/续跑；Desktop 仍为同进程 Tk 参考壳。
+
+本轮执行：
+
+```bash
+python3 -m pytest -q tests/test_desktop_controller.py tests/test_runtime_shutdown.py tests/test_runtime_approval_control.py tests/test_runtime_observation.py tests/test_execution_recovery.py tests/test_mcp_lifecycle.py tests/test_mcp_runtime_hardening.py --tb=short
+```
+
+结果：119 项通过。覆盖 Desktop 控制与审批窗口生命周期、Runtime 关闭重试、审批控制、任务观察、执行恢复和 MCP 生命周期相关行为；未执行全量回归、真实模型任务或图形环境人工验收，不将这些结果外推为桌面产品已验收。下一项按[路线中的执行顺序](../roadmap.md#2026-11-04-复核后的执行顺序)推进真实桌面闭环，并依据实际失败补齐实现。

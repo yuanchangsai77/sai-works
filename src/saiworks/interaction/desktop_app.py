@@ -5,7 +5,7 @@ from queue import Queue
 import signal
 from threading import Lock, Thread
 
-from .desktop import DesktopController
+from .desktop import DesktopController, DesktopResultView
 from .desktop_presenter import (
     ActivityStep,
     DesktopApprovalRequest,
@@ -72,7 +72,7 @@ class DesktopApp:
 
         runtime.configure_interaction(
             approval_callback=self._request_approval,
-            progress_reporter=DesktopProgressReporter(self._post_status),
+            progress_reporter=DesktopProgressReporter(self._post_status, lambda channel, text: self._events.put(("stream", (channel, text)))),
         )
         self._event_timer = root.after(50, self._drain_events)
         self._open_workspace()
@@ -167,8 +167,14 @@ class DesktopApp:
         self.ttk.Button(self.progress_card, text="View activity →", style="Secondary.TButton", command=lambda: self._toggle_activity(True)).grid(row=0, column=1)
         self.progress_card.grid_remove()
 
-        transcript_frame = self.ttk.Frame(main, style="Surface.TFrame")
-        transcript_frame.grid(row=2, column=0, sticky="nsew")
+        self.views = self.ttk.Notebook(main)
+        self.views.grid(row=2, column=0, sticky="nsew")
+        transcript_frame = self.ttk.Frame(self.views, style="Surface.TFrame")
+        self.views.add(transcript_frame, text="Conversation")
+        self.result_text = self.tk.Text(self.views, wrap="word", state="disabled", padx=20, pady=18)
+        self.artifact_text = self.tk.Text(self.views, wrap="word", state="disabled", padx=20, pady=18)
+        self.views.add(self.result_text, text="Result")
+        self.views.add(self.artifact_text, text="Artifacts")
         transcript_frame.columnconfigure(0, weight=1)
         transcript_frame.rowconfigure(0, weight=1)
         self.transcript = self.tk.Text(
@@ -303,6 +309,7 @@ class DesktopApp:
         if not prompt or self._running:
             return
         self.prompt_entry.delete("1.0", "end")
+        self.transcript.mark_unset("stream_start")
         self._append("user", prompt)
         self._activity.start()
         self._render_activity()
@@ -329,6 +336,7 @@ class DesktopApp:
         if not self._running:
             return
         self.controller.cancel_current()
+        self._reject_pending_approvals()
         self.status.set("Cancellation requested; checking the active operation…")
 
     def _post_status(self, message: str) -> None:
@@ -363,9 +371,23 @@ class DesktopApp:
 
     def _drain_events(self) -> None:
         self._event_timer = None
-        while not self._closed and not self._events.empty():
+        processed = 0
+        while not self._closed and not self._events.empty() and processed < 100:
+            processed += 1
             kind, value = self._events.get_nowait()
-            if kind == "status":
+            if kind == "stream":
+                channel, text = value
+                self.transcript.configure(state="normal")
+                if channel == "reset":
+                    if "stream_start" in self.transcript.mark_names():
+                        self.transcript.delete("stream_start", "end-1c")
+                    self.transcript.mark_set("stream_start", "end-1c")
+                    self.transcript.mark_gravity("stream_start", "left")
+                else:
+                    self.transcript.insert("end", text, "assistant_body")
+                self.transcript.configure(state="disabled")
+                self.transcript.see("end")
+            elif kind == "status":
                 self.status.set(str(value))
                 self._record_activity(str(value))
             elif kind == "approval":
@@ -393,11 +415,13 @@ class DesktopApp:
                 self._refresh_tasks()
                 self._close_if_requested()
             elif kind == "interrupted":
+                self._render(self.controller.view().messages)
                 self._set_running(False)
                 self.status.set("Interrupted")
                 self._finish_activity("interrupted")
                 self._close_if_requested()
             elif kind == "error":
+                self._render(self.controller.view().messages)
                 self._set_running(False)
                 self.status.set("Run failed")
                 self._finish_activity("runtime_error")
@@ -460,6 +484,7 @@ class DesktopApp:
 
     def _render(self, messages: tuple[tuple[str, str], ...]) -> None:
         self.transcript.configure(state="normal")
+        self.transcript.mark_unset("stream_start")
         self.transcript.delete("1.0", "end")
         if not messages:
             self.transcript.insert(
@@ -467,10 +492,19 @@ class DesktopApp:
                 "Start with a question, a task, or something you want to create.",
                 "empty",
             )
+        results = self.controller.results()
+        self._set_projection(results[-1] if results else None)
         for role, content in messages:
             self._insert_message(role, content)
         self.transcript.configure(state="disabled")
         self.transcript.see("end")
+
+    def _set_projection(self, projection):
+        for widget, text in ((self.result_text, projection.result_text() if projection else "No run results yet."), (self.artifact_text, projection.artifact_text() if projection else "No artifacts recorded.")):
+            widget.configure(state="normal")
+            widget.delete("1.0", "end")
+            widget.insert("end", text)
+            widget.configure(state="disabled")
 
     def _append(self, role: str, content: str) -> None:
         self.transcript.configure(state="normal")
@@ -481,24 +515,9 @@ class DesktopApp:
         self.transcript.see("end")
 
     def _append_result(self, summary) -> None:
-        self.transcript.configure(state="normal")
-        outcome = getattr(summary, "outcome", "completed")
-        success = outcome == "completed"
-        self.transcript.insert("end", "RESULT\n", "assistant_label")
-        heading = "Completed" if success else f"Needs attention · {outcome.replace('_', ' ')}"
-        blockers = getattr(summary, "blockers", [])
-        blocker_text = ""
-        if blockers:
-            blocker_text = "\n\nWhat blocked this:\n" + "\n".join(
-                f"• {getattr(item, 'summary', str(item))}" for item in blockers[:3]
-            )
-        self.transcript.insert(
-            "end",
-            f"{heading}\n\n{summary.final_message.strip()}{blocker_text}\n\n",
-            "result_ok" if success else "result_error",
-        )
-        self.transcript.configure(state="disabled")
-        self.transcript.see("end")
+        self._render(self.controller.view().messages)
+        projection = DesktopResultView.from_result(summary)
+        self._set_projection(projection)
 
     def _insert_message(self, role: str, content: str) -> None:
         is_user = role.lower() == "user"

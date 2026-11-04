@@ -176,8 +176,8 @@ def test_desktop_activity_model_preserves_execution_semantics():
 
     assert [step.state for step in activity.steps] == ["done", "done", "done"]
     assert activity.steps[1].label == "Read a workspace file"
-    assert label == "Completed and verified"
-    assert activity.headline == "✓  Completed and verified"
+    assert label == "Completed"
+    assert activity.headline == "✓  Completed"
 
 
 def test_desktop_activity_model_marks_incomplete_outcome_as_failed():
@@ -457,3 +457,52 @@ def test_desktop_elapsed_time_handles_incompatible_timezones():
         "2026-10-02T00:00:00",
         "2026-10-02T00:01:00+00:00",
     ) == "Unavailable"
+
+
+def test_desktop_result_projection_preserves_facts_without_mutable_aliases():
+    from saiworks.interaction.desktop import DesktopResultView
+    from saiworks.types import EvidenceRecord, RuntimeBlocker
+    checkpoint = TaskCheckpoint(
+        artifacts=['a.py'], completed_actions=['updated a.py'],
+        evidence=[EvidenceRecord('test', 'pytest', 'task', 2, artifact_refs=['a.py', 'report'])],
+        unmet_deliverables=['manual review'],
+    )
+    summary = ExecutionSummary('partial', [], outcome='blocked', checkpoint=checkpoint,
+                               blockers=[RuntimeBlocker('approval_denied', 'Write denied')])
+    view = DesktopResultView.from_result(summary)
+    checkpoint.artifacts.append('later')
+    assert view.artifacts == ('a.py', 'report')
+    assert 'Write denied' in view.result_text()
+    assert 'manual review' in view.result_text()
+    assert 'revision 2' in view.result_text()
+    assert 'later' not in view.artifact_text()
+
+
+def test_desktop_stream_preview_resets_on_retry_and_filters_channels():
+    streamed = []
+    reporter = DesktopProgressReporter(lambda _: None, lambda channel, text: streamed.append((channel, text)))
+    handle = reporter.model_started()
+    reporter.model_stream_delta(handle, 'thinking', 'private')
+    reporter.model_stream_delta(handle, 'message', 'partial')
+    reporter.model_retrying(handle, 1, 2, 'retry', 0)
+    assert streamed == [('reset', ''), ('message', 'partial'), ('reset', '')]
+
+
+@pytest.mark.parametrize('kind', ['interrupted', 'error'])
+def test_desktop_failure_replaces_stream_preview_with_persisted_messages(kind):
+    app = DesktopApp.__new__(DesktopApp)
+    app._events = Queue()
+    app._events.put((kind, RuntimeError('failed') if kind == 'error' else None))
+    app._closed = False
+    app.root = SimpleNamespace(after=lambda *_: 'timer')
+    messages = (('user', 'request'), ('assistant', 'saved result'))
+    app.controller = SimpleNamespace(view=lambda: SimpleNamespace(messages=messages))
+    rendered = []
+    app._render = rendered.append
+    app._set_running = lambda _: None
+    app.status = SimpleNamespace(set=lambda _: None)
+    app._finish_activity = lambda _: None
+    app._close_if_requested = lambda: None
+    app.messagebox = SimpleNamespace(showerror=lambda *_: None)
+    app._drain_events()
+    assert rendered == [messages]

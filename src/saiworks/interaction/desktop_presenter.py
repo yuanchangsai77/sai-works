@@ -88,7 +88,7 @@ class DesktopActivityModel:
 
     def finish(self, outcome: str) -> str:
         state, label, symbol = {
-            "completed": ("done", "Completed and verified", "✓"),
+            "completed": ("done", "Completed", "✓"),
             "interrupted": ("cancelled", "Cancelled and stopped", "■"),
             "blocked": ("blocked", "Blocked: needs your input", "!"),
             "exhausted": ("warning", "Execution limit reached", "!"),
@@ -111,20 +111,26 @@ class DesktopActivityModel:
 class DesktopProgressReporter:
     """Translate engine progress into presentation-safe Desktop status text."""
 
-    def __init__(self, publish) -> None:
+    def __init__(self, publish, stream=None) -> None:
         self.publish = publish
+        self.stream = stream
 
     def model_started(self, message: str = "Model is thinking…"):
+        if self.stream:
+            self.stream("reset", "")
         self.publish(message)
         return "model"
 
     def model_finished(self, _handle) -> None:
         self.publish("Preparing result…")
 
-    def model_stream_delta(self, _handle, _channel: str, _text: str) -> None:
-        return None
+    def model_stream_delta(self, _handle, channel: str, text: str) -> None:
+        if self.stream and channel == "message" and text:
+            self.stream(channel, text)
 
     def model_retrying(self, _handle, retry: int, max_retries: int, status: str, delay_seconds: float) -> None:
+        if self.stream:
+            self.stream("reset", "")
         self.publish(f"Model retry {retry}/{max_retries}: {status}; waiting {delay_seconds:g}s")
 
     def tool_started(self, action_name: str):

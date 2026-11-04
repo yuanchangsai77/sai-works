@@ -43,6 +43,52 @@ class DesktopDiagnosticView:
     log_path: str
 
 
+@dataclass(frozen=True, slots=True)
+class DesktopResultView:
+    outcome: str
+    message: str
+    actions: tuple[str, ...]
+    artifacts: tuple[str, ...]
+    evidence: tuple[str, ...]
+    blockers: tuple[str, ...]
+    unmet: tuple[str, ...]
+
+    @classmethod
+    def from_result(cls, result):
+        checkpoint = result.checkpoint
+        return cls(
+            outcome=result.outcome,
+            message=result.final_message,
+            actions=tuple(checkpoint.completed_actions),
+            artifacts=tuple(dict.fromkeys([
+                *checkpoint.artifacts,
+                *(ref for item in checkpoint.evidence for ref in item.artifact_refs),
+            ])),
+            evidence=tuple(
+                f"{item.kind} · {item.producer} · revision {item.workspace_revision}"
+                for item in checkpoint.evidence
+            ),
+            blockers=tuple(dict.fromkeys(
+                item.summary for item in [*result.blockers, *checkpoint.blockers]
+            )),
+            unmet=tuple(checkpoint.unmet_deliverables),
+        )
+
+    def result_text(self) -> str:
+        sections = [f"Outcome: {self.outcome.replace('_', ' ')}", self.message]
+        for heading, items in (
+            ("Completed actions", self.actions), ("Verification evidence", self.evidence),
+            ("Needs attention", self.blockers), ("Not delivered", self.unmet),
+        ):
+            sections.append(heading + "\n" + ("\n".join(f"• {item}" for item in items) or "None recorded"))
+        return "\n\n".join(sections)
+
+    def artifact_text(self) -> str:
+        return "Recorded artifact references\n\n" + (
+            "\n".join(self.artifacts) or "No artifacts recorded for this run."
+        ) + "\n\nReferences describe execution evidence; they are not a preview of current file contents."
+
+
 class DesktopController:
     """GUI-independent Desktop shell adapter over the Runtime facade.
 
@@ -126,6 +172,9 @@ class DesktopController:
             tool_names=tuple(latest_trace.tool_names if latest_trace is not None else resume.last_tool_names),
             log_path=str(log_path) if log_path is not None else "",
         )
+
+    def results(self) -> tuple[DesktopResultView, ...]:
+        return tuple(DesktopResultView.from_result(trace) for trace in self._require_session().trace)
 
     def submit(
         self,
