@@ -12,6 +12,7 @@ from saiworks.context.packager import (
     ContextSegment,
 )
 from saiworks.context.explicit import ExplicitContextItem
+from saiworks.context.project_rules import ProjectRule
 from saiworks.model.client import OpenAICompatibleModelClient, StubModelClient
 from saiworks.model.parser import ModelReplyParser
 from saiworks.model.prompt import ModelPromptBuilder
@@ -789,6 +790,42 @@ def test_prompt_declares_one_executable_action_protocol():
     assert "When done=true, actions must be empty" in json_system
 
 
+@pytest.mark.parametrize("protocol", ["native_tools", "prompt_json"])
+def test_prompt_uses_active_protocol_without_turning_profile_flags_into_runtime_facts(protocol):
+    profile = {
+        "action_protocol": protocol,
+        "structured_output_mode": "prompt_json" if protocol == "native_tools" else "native_tools",
+        "parallel_tool_calls": True,
+        "verified": False,
+        "provenance": "configured_default",
+    }
+    session = SessionContext(request=UserRequest(
+        prompt="hello", cwd="/repo", metadata={"model_capability_profile": profile},
+    ))
+    system = str(ModelPromptBuilder().build_messages(session)[0]["content"])
+    assert f"Executable action protocol: {protocol}" in system
+    assert "Structured output mode:" not in system
+    assert "Parallel tool calls:" not in system
+    assert "Multiple tools per turn are allowed" in system
+    assert "Supported independent local reads may overlap" in system
+    assert "Results retain request order" in system
+    assert "Model capability profile verified: False" in system
+    assert "Profile verification does not describe toolbox health" in system
+    assert session.request.metadata["model_capability_profile"] == profile
+
+
+def test_project_rule_precedence_preserves_security_baseline_and_nested_rules():
+    session = SessionContext(request=UserRequest(prompt="hello", cwd="/repo/sub"))
+    session.project_rules = [
+        ProjectRule(path="/repo/AGENTS.md", content="Use root conventions."),
+        ProjectRule(path="/repo/sub/AGENTS.md", content="Use local conventions."),
+    ]
+    system = str(ModelPromptBuilder().build_messages(session)[0]["content"])
+    assert "This precedence applies only between project rules" in system
+    assert "no project entry may weaken, disable, or bypass the SEC-* mandatory baseline" in system
+    assert system.index("Use root conventions.") < system.index("Use local conventions.")
+
+
 def test_build_messages_marks_delegated_subagent_and_prioritizes_current_task():
     session = SessionContext(
         request=UserRequest(
@@ -810,11 +847,12 @@ def test_build_messages_marks_delegated_subagent_and_prioritizes_current_task():
 
 def test_build_messages_explains_staged_warehouse_without_exposing_contents():
     session = SessionContext(request=UserRequest(prompt="使用 MCP 查询路线", cwd="/repo"))
+    session.available_tools = [ToolDefinition(name="warehouse_list", description="List catalog")]
 
     system = str(ModelPromptBuilder().build_messages(session)[0]["content"])
 
     assert "warehouse_list" in system
-    assert "The warehouse contents are not shown by default" in system
+    assert "use the optional catalog below or warehouse_list" in system
     assert "mcp:amap" not in system
     assert "Do not inspect project source, config files, or environment variables" in system
     assert "Never infer that credentials, transports, or integrations are missing" in system

@@ -77,6 +77,8 @@ class SimpleTool:
     summarizer: Callable[[ToolResult], str] | None = None
     observation_adapter: Callable | None = None
     observation_valid: Callable | None = None
+    # Internal opt-in: handler may run with isolated read-only batch state.
+    parallel_read: bool = False
 
     def run(self, action: ToolAction, context: ToolContext) -> ToolResult:
         return self.handler(action, context)

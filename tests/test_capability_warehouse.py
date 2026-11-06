@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 
 import pytest
 
@@ -21,11 +22,12 @@ from saiworks.capabilities.mcp_source import MCPToolboxSource
 from saiworks.capabilities.warehouse import CapabilityWarehouse
 from saiworks.mcp.config import MCPServerConfig
 from saiworks.model.prompt import ModelPromptBuilder
+from saiworks.context.packager import ContextPackager
 from saiworks.observability.logger import InMemoryLogger
 from saiworks.orchestration.session import SessionContext
 from saiworks.tools.base import SimpleTool
 from saiworks.tools.registry import ToolRegistry
-from saiworks.types import ToolAction, ToolResult, UserRequest
+from saiworks.types import ModelReply, ToolAction, ToolDefinition, ToolResult, UserRequest
 
 
 def _tool(name: str) -> SimpleTool:
@@ -156,6 +158,95 @@ def test_opened_items_exposes_only_already_opened_manifest_items():
         "fake:maps:route",
     ]
     assert source.open_calls == 1
+
+
+def test_runtime_catalog_is_visible_without_opening_or_activating_tools():
+    source = FakeSource()
+    warehouse, registry = _warehouse(source)
+    session = SessionContext(request=UserRequest(prompt="plan a route", cwd="/repo"))
+    warehouse.apply_to_session(session)
+    system = str(ModelPromptBuilder().build_messages(session)[0]["content"])
+
+    assert '"id": "fake:maps"' in system
+    assert "Map lookup and routes" in system
+    assert "fake:maps:lookup" not in system
+    assert source.open_calls == 0
+    assert registry.definition_for("lookup") is None
+    assert warehouse.active_ids() == []
+
+    # Repeated model turns reuse the run snapshot; a new run sees catalog changes.
+    source.catalog_entries = lambda: ()
+    warehouse.apply_to_session(session)
+    assert '"id": "fake:maps"' in session.capability_catalog
+    next_session = SessionContext(request=UserRequest(prompt="hello", cwd="/repo"))
+    warehouse.apply_to_session(next_session)
+    assert next_session.capability_catalog == ""
+
+
+def test_direct_answer_needs_no_discovery_or_activation(tmp_path, monkeypatch):
+    app = create_app(workspace_root=tmp_path)
+    source = FakeSource()
+    app.engine.capability_warehouse = CapabilityWarehouse([source], app.engine.tools)
+    calls = []
+
+    def respond(session):
+        calls.append(session)
+        assert '"id": "fake:maps"' in session.capability_catalog
+        assert "lookup" not in {tool.name for tool in session.available_tools}
+        return ModelReply(message="hello", done=True)
+
+    monkeypatch.setattr(app.engine.model, "respond", respond)
+    summary = app.engine.execute(UserRequest(prompt="hello", cwd=str(tmp_path)))
+
+    assert len(calls) == 1
+    assert summary.final_message == "hello"
+    assert summary.tool_results == []
+    assert source.open_calls == 0
+
+
+def test_runtime_catalog_bounds_entries_text_and_preserves_identifiers():
+    source = FakeSource()
+    source.catalog_entries = lambda: tuple(
+        CapabilityEntry(
+            id=f"fake:{index:02d}", name=f"box{index:02d}", kind="toolbox", source="fake",
+            description='description "quoted"\n' * 200, enabled=index != 0,
+            metadata={"target": "PRIVATE_TARGET"},
+        ) for index in range(30)
+    )
+    warehouse, registry = _warehouse(source)
+    summary = warehouse.model_catalog_summary()
+    rows = [json.loads(line) for line in summary.splitlines() if line.startswith("{")]
+
+    assert len(summary) <= 3_000
+    assert 0 < len(rows) <= 8
+    assert all(len(row["description"]) <= 160 for row in rows)
+    assert [row["id"] for row in rows] == [f"fake:{index:02d}" for index in range(len(rows))]
+    assert rows[0]["enabled"] is False
+    assert "warehouse_list" in summary
+    assert "PRIVATE_TARGET" not in summary
+    assert source.open_calls == 0
+    assert registry.definition_for("lookup") is None
+
+    source.catalog_entries = lambda: (
+        CapabilityEntry("fake:" + "x" * 4_000, "huge", "toolbox", "fake", "huge id"),
+    )
+    summary = warehouse.model_catalog_summary()
+    assert len(summary) <= 3_000
+    assert "warehouse_list" in summary
+    assert not any(line.startswith("{") for line in summary.splitlines())
+
+
+def test_small_context_omits_catalog_atomically_without_semantic_compression():
+    session = SessionContext(request=UserRequest(prompt="hello", cwd="/repo"))
+    session.available_tools = [ToolDefinition(name="warehouse_list", description="List catalog")]
+    session.capability_catalog = "CATALOG_START\n" + "x" * 2_800 + "\nCATALOG_END"
+    messages = ModelPromptBuilder(ContextPackager(4_000)).build_messages(session)
+    system = str(messages[0]["content"])
+
+    assert "CATALOG_START" not in system
+    assert "CATALOG_END" not in system
+    assert "warehouse_list" in system
+    assert sum(len(str(item.get("content", ""))) for item in messages) <= 4_000
 
 
 def test_activation_target_expands_one_toolbox_to_its_manifest_items():
@@ -446,7 +537,7 @@ PRIVATE ROUTE INSTRUCTIONS
 
     warehouse.apply_to_session(session)
     initial_prompt = str(ModelPromptBuilder().build_messages(session)[0]["content"])
-    assert "skill:route-guide" not in initial_prompt
+    assert "skill:route-guide:instructions" not in initial_prompt
     assert "PRIVATE ROUTE INSTRUCTIONS" not in initial_prompt
 
     warehouse.open_toolbox("skill:route-guide")

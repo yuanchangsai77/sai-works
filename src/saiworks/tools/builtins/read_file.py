@@ -44,6 +44,7 @@ def tool(default_max_bytes: int = DEFAULT_READ_BYTES) -> SimpleTool:
         summarizer=read_file_summary,
         observation_adapter=file_observation,
         observation_valid=file_observation_valid,
+        parallel_read=True,
     )
 
 

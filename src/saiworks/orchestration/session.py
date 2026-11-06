@@ -39,6 +39,8 @@ class SessionContext:
     context_segment_summary_cache: dict[tuple[str, str], str] = field(default_factory=dict)
     tool_results: list[ToolResult] = field(default_factory=list)
     active_instructions: list[InstructionContent] = field(default_factory=list)
+    capability_catalog: str | None = None
+    operation_guidance: tuple[str, ...] | None = None
     project_rules: list[ProjectRule] = field(default_factory=list)
     workspace_summary: WorkspaceSummary | None = None
     explicit_context: list[ExplicitContextItem] = field(default_factory=list)

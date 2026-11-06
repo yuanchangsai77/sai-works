@@ -29,6 +29,7 @@ def tool(default_max_entries: int = DEFAULT_LIST_ENTRIES) -> SimpleTool:
         handler=lambda action, context: run(action, context, default_max_entries),
         summarizer=list_dir_summary,
         observation_adapter=query_observation(),
+        parallel_read=True,
     )
 
 

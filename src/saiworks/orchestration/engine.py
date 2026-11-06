@@ -27,6 +27,7 @@ from .control import CompletionPolicy, RunBudgetPolicy
 from .ext import ContextLoader
 from .failures import runtime_failure_message, runtime_failure_retryability
 from .finalize import RunFinalizer
+from .guidance import select_operation_guidance
 from .model_turn import ModelTurn
 from .permissions import PermissionContext
 from .progress import (
@@ -335,6 +336,7 @@ class ExecutionEngine:
             )
             if self.capability_warehouse is not None:
                 self.capability_warehouse.apply_to_session(session)
+            session.operation_guidance = select_operation_guidance(session)
             reply, budget_problem = model_turn.request()
             if budget_problem is not None:
                 return self._finish(self._budget_summary(session, budget_problem))

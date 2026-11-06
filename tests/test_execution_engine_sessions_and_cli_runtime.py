@@ -1097,18 +1097,13 @@ command = "fake-amap"
         turn = len(observed["turn_tools"])
         if turn == 1:
             assert lifecycle["initialized"] == 0
-            return ModelReply(
-                message="list warehouse",
-                actions=[ToolAction(name="warehouse_list", arguments={})],
-            )
-        if turn == 2:
-            assert lifecycle["initialized"] == 0
-            assert "mcp:amap" in session.tool_results[-1].output
+            assert '"id": "mcp:amap"' in session.capability_catalog
+            assert not session.tool_results
             return ModelReply(
                 message="open maps",
                 actions=[ToolAction(name="toolbox_open", arguments={"toolbox_id": "mcp:amap"})],
             )
-        if turn == 3:
+        if turn == 2:
             assert lifecycle["initialized"] == 1
             return ModelReply(
                 message="activate route planner",
@@ -1128,8 +1123,9 @@ command = "fake-amap"
     assert summary.final_message == "route ready"
     assert "amap__maps_direction_driving" not in observed["turn_tools"][0]
     assert "amap__maps_direction_driving" not in observed["turn_tools"][1]
-    assert "amap__maps_direction_driving" not in observed["turn_tools"][2]
-    assert "amap__maps_direction_driving" in observed["turn_tools"][3]
+    assert "amap__maps_direction_driving" in observed["turn_tools"][2]
+    assert len(observed["turn_tools"]) == 3
+    assert [result.name for result in summary.tool_results] == ["toolbox_open", "capability_activate"]
     assert observed["workspace_summary"] is None
     assert lifecycle["initialized"] == 1
 

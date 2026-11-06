@@ -17,6 +17,7 @@ def tool() -> SimpleTool:
         handler=run,
         summarizer=file_info_summary,
         observation_adapter=query_observation(),
+        parallel_read=True,
     )
 
 

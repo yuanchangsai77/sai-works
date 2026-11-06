@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import time
-from collections.abc import Iterable
+from collections.abc import Generator, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable
@@ -41,11 +41,22 @@ class ActionEnvironment:
         return self.approval_callback_provider()
 
 
+@dataclass(frozen=True, slots=True)
+class ToolCall:
+    action: ToolAction
+    cwd: str
+    allowed_roots: list[str]
+    parallel_allowed: bool = False
+    count_action: bool = True
+
+
 class ActionFlow:
     """Process one model turn's actions in the existing security-check order.
 
     ToolRegistry owns real execution logging. This flow owns the single
     projection of each returned or synthetic result into the run session.
+    Action generators pause only at a tool call, allowing admission and result
+    handling to stay on this thread while the registry isolates safe read handlers.
     """
 
     def __init__(
@@ -66,18 +77,112 @@ class ActionFlow:
         self.visible_names = visible_names
         self.recorder = recorder
         self.results: list[ToolResult] = []
+        self._admission_records: list | None = None
 
     def process(self, actions: Iterable[ToolAction]) -> list[ToolResult]:
-        for action in actions:
-            self.environment.raise_if_cancelled()
-            self._process_one(action)
+        pending = []
+        pending_keys = set()
+        admitted_steps = []
+        supports = getattr(self.environment.tools, "can_batch_read", None)
+        batch = getattr(self.environment.tools, "execute_read_batch", None)
+        try:
+            for action in actions:
+                self.environment.raise_if_cancelled()
+                key = self._action_key(action)
+                eligible = callable(supports) and callable(batch) and supports(
+                    action, cwd=self._task_workspace_root(self.request, self.session),
+                    allowed_roots=self.permissions.workspace_roots(scopes={"run", "session"}),
+                )
+                if not eligible or key in pending_keys or len(pending) == 4:
+                    self._flush_reads(pending)
+                    pending_keys.clear()
+                    self.environment.raise_if_cancelled()
+                steps = self._process_one(action)
+                admitted_steps.append(steps)
+                # Admission may reject an action. Delay its result until preceding reads commit.
+                deferred = []
+                self._admission_records = deferred
+                try:
+                    call = next(steps, None)
+                finally:
+                    self._admission_records = None
+                if call is None:
+                    self._flush_reads(pending)
+                    pending_keys.clear()
+                    for result, synthetic, refresh in deferred:
+                        self._record(result, synthetic=synthetic, refresh=refresh)
+                elif eligible and call.parallel_allowed:
+                    pending.append((steps, call))
+                    pending_keys.add(key)
+                else:
+                    self._flush_reads(pending)
+                    pending_keys.clear()
+                    self._drive_steps(steps, call)
+            self._flush_reads(pending)
+        finally:
+            for steps in admitted_steps:
+                steps.close()
         return self.results
 
+    def _drive_steps(self, steps, call, outcome=None) -> None:
+        try:
+            while True:
+                if outcome is None:
+                    try:
+                        if call.count_action:
+                            self.state.real_tool_actions += 1
+                        outcome = self._call_tool(call.action, cwd=call.cwd, allowed_roots=call.allowed_roots)
+                    except BaseException as error:
+                        outcome = error
+                call = steps.throw(outcome) if isinstance(outcome, BaseException) else steps.send(outcome)
+                outcome = None
+        except StopIteration:
+            return
+        finally:
+            steps.close()
+
+    def _flush_reads(self, pending) -> None:
+        if not pending:
+            return
+        self.environment.raise_if_cancelled()
+        entries = list(pending)
+        pending.clear()
+        started = None
+        previous_seconds = self.state.tool_seconds
+        try:
+            if len(entries) == 1:
+                self._drive_steps(*entries[0])
+                return
+            calls = [(call.action, call.cwd, call.allowed_roots) for _, call in entries]
+            started = time.monotonic()
+            def before_dispatch():
+                self.environment.raise_if_cancelled()
+                self.state.real_tool_actions += len(entries)
+
+            outcomes = self.environment.tools.execute_read_batch(calls, before_dispatch=before_dispatch)
+            first_error = None
+            for (steps, call), outcome in zip(entries, outcomes):
+                try:
+                    self._drive_steps(steps, call, outcome)
+                except BaseException as error:
+                    if first_error is None:
+                        first_error = error
+            if first_error is not None:
+                raise first_error
+        finally:
+            for steps, _ in entries:
+                steps.close()
+            if started is not None:
+                self.state.tool_seconds = previous_seconds + max(0.0, time.monotonic() - started)
+
     def _record(self, result: ToolResult, *, synthetic: bool = False, refresh: bool = False) -> None:
+        if self._admission_records is not None:
+            self._admission_records.append((result, synthetic, refresh))
+            return
         self.recorder.record(result, synthetic=synthetic, refresh_workspace=refresh)
         self.results.append(result)
 
-    def _process_one(self, action: ToolAction) -> None:
+    def _process_one(self, action: ToolAction) -> Generator:
         services = self.environment
         state = self.state
         cwd = self._task_workspace_root(self.request, self.session)
@@ -189,7 +294,7 @@ class ActionFlow:
 
         started = time.monotonic()
         try:
-            result, action_id, phase = self._execute_action(
+            result, action_id, phase = yield from self._execute_action(
                 action, cwd, self.permissions, self.session, decision.risk_level,
             )
         finally:
@@ -302,7 +407,7 @@ class ActionFlow:
         permissions: PermissionContext,
         session: SessionContext,
         risk_level: str,
-    ) -> tuple[ToolResult, str | None, ExecutionPhase]:
+    ) -> Generator[ToolCall, ToolExecution, tuple[ToolResult, str | None, ExecutionPhase]]:
         progress_handle = None
         result = None
         action_id = None
@@ -319,11 +424,9 @@ class ActionFlow:
                     "workspace": cwd, "risk_level": risk_level,
                     "arguments": action.arguments,
                 })
-            self.state.real_tool_actions += 1
-            execution = self._call_tool(
-                action,
-                cwd=cwd,
-                allowed_roots=permissions.workspace_roots(scopes={"run", "session"}),
+            execution = yield ToolCall(
+                action, cwd, permissions.workspace_roots(scopes={"run", "session"}),
+                parallel_allowed=risk_level == "read",
             )
             result, phase = execution.result, execution.phase
             self._attach_action_metadata(result, action)
@@ -379,10 +482,9 @@ class ActionFlow:
                     if self.environment.progress_reporter:
                         progress_handle = self.environment.progress_reporter.tool_started(action.name)
                     self.environment.raise_if_cancelled()
-                    retry = self._call_tool(
-                        action,
-                        cwd=cwd,
-                        allowed_roots=permissions.workspace_roots(scopes={"run", "session"}),
+                    retry = yield ToolCall(
+                        action, cwd, permissions.workspace_roots(scopes={"run", "session"}),
+                        count_action=False,
                     )
                     retried, phase = retry.result, retry.phase
                     self._attach_action_metadata(retried, action)

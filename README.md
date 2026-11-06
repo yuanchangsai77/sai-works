@@ -222,6 +222,15 @@ those Skill toolbox leaves when the task needs them; `/skill <name>` activates t
 interactive use. Tool providers remain the implementation owners; Skills group and recommend reusable
 capabilities rather than defining whether a core tool exists.
 
+Each run receives a bounded outer capability catalog when context space allows, so a listed toolbox
+can be opened directly without first calling `warehouse_list`. The snapshot does not connect to remote
+servers or activate tools. Additional entries remain available through `warehouse_list`; opening and
+activation still use the existing explicit lifecycle.
+
+Within one model turn, up to four consecutive independent local reads can overlap after admission.
+File reads, file metadata and directory listings opt into isolated execution; results remain in request
+order. Writes, Shell commands, capability changes and requests for new path access remain serial barriers.
+
 写入操作会在执行前展示变更摘要并要求显式确认：
 
 ![SaiWorks 写入审批](docs/assets/saiworks-write-approval.png)

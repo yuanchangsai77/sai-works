@@ -156,7 +156,8 @@ def test_patch_requires_lines_visible_in_the_final_model_context(tmp_path):
 
 
 @pytest.mark.parametrize("build_prompt", [True, False])
-def test_same_turn_read_cannot_authorize_unseen_zero_context_patch(tmp_path, build_prompt):
+@pytest.mark.parametrize("parallel_reads", [True, False])
+def test_same_turn_read_cannot_authorize_unseen_zero_context_patch(tmp_path, build_prompt, parallel_reads):
     from saiworks.model.prompt import ModelPromptBuilder
     from saiworks.orchestration.engine import ExecutionEngine
     from saiworks.safety.guardrails import Guardrails
@@ -165,6 +166,7 @@ def test_same_turn_read_cannot_authorize_unseen_zero_context_patch(tmp_path, bui
 
     path = tmp_path / "target.txt"
     path.write_text("before\n")
+    (tmp_path / "other.txt").write_text("other\n")
     diff = "--- a/target.txt\n+++ b/target.txt\n@@ -1,0 +2 @@\n+after\n"
 
     class Model:
@@ -175,10 +177,10 @@ def test_same_turn_read_cannot_authorize_unseen_zero_context_patch(tmp_path, bui
             if build_prompt:
                 ModelPromptBuilder(ContextPackager()).build_messages(session)
             if self.calls == 1:
-                return ModelReply("read and insert", actions=[
-                    ToolAction("read_file", {"path": path.name}),
-                    ToolAction("patch", {"diff": diff}),
-                ])
+                reads = [ToolAction("read_file", {"path": path.name})]
+                if parallel_reads:
+                    reads.append(ToolAction("read_file", {"path": "other.txt"}))
+                return ModelReply("read and insert", actions=[*reads, ToolAction("patch", {"diff": diff})])
             if self.calls == 2:
                 return ModelReply("retry after seeing the read", actions=[ToolAction("patch", {"diff": diff})])
             return ModelReply("done", done=True)

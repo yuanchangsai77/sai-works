@@ -3,12 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from contextlib import contextmanager
 from threading import Lock, RLock
+from concurrent.futures import ThreadPoolExecutor
 
 from ..observations import Observation, ObservationArchive, observation_for
 from ..types import ToolAction, ToolDefinition, ToolResult
 from .base import EffectTracker, ExecutionPhase, ToolContext, ToolExecution
 from .result_packager import TRUNCATION_MARKER, ToolResultPackager
 from .schema_validation import validate_schema
+from .shared import resolve_workspace_path
 
 
 class ToolRegistry:
@@ -174,11 +176,14 @@ class ToolRegistry:
         tracker = EffectTracker() if getattr(tool, "tracks_effects", False) else None
         context.effect_tracker = tracker
         result = tool.run(action, context)
+        return self._finish_execution(action, cwd, tool, context, result, action_event, observed_before, tracker)
+
+    def _finish_execution(self, action, cwd, tool, context, result, action_event, observed_before, tracker):
         adapter = getattr(tool, "observation_adapter", None)
         spec = adapter(action, result, context) if callable(adapter) and result.success else None
         raw_output = result.output
         observation = Observation.create(action, result, str(Path(cwd).resolve()),
-                                         str(self._state.get("active_session_id") or ""), spec)
+                                         str(context.state.get("active_session_id") or ""), spec)
         observation = self.observation_archive.save(observation, raw_output, action.arguments)
         result = self._result_packager.package(result)
         self._bind_visible_read_state(observed_before, observation.identifier, result, raw_output)
@@ -205,6 +210,87 @@ class ToolRegistry:
             ExecutionPhase.STARTED if tracker.started else ExecutionPhase.NOT_STARTED
         )
         return ToolExecution(result, phase)
+
+    def supports_parallel_read(self, name: str) -> bool:
+        tool = self._tools.get(name)
+        return bool(tool and getattr(tool, "parallel_read", False)
+                    and getattr(tool, "risk_level", None) == "read"
+                    and not getattr(tool, "tracks_effects", False))
+
+    def can_batch_read(self, action, *, cwd, allowed_roots) -> bool:
+        if not self.supports_parallel_read(action.name):
+            return False
+        resolved = resolve_workspace_path(self._context(cwd, allowed_roots), action.arguments.get("path", "."))
+        return not isinstance(resolved, ToolResult)
+
+    def execute_read_batch(self, calls, *, before_dispatch=None) -> list[ToolExecution | BaseException]:
+        """Run only isolated handlers in workers; merge and log on the calling thread."""
+        if not 1 <= len(calls) <= 4:
+            raise ValueError("read batch must contain one to four calls")
+        if not all(self.supports_parallel_read(action.name) for action, _, _ in calls):
+            raise ValueError("read batch contains a tool without isolation support")
+        if not self._execution_lock.acquire(blocking=False):
+            raise RuntimeError("Tool registry is already executing a tool")
+        try:
+            generation = self._state_generation
+            prepared = []
+            for action, cwd, allowed_roots in calls:
+                blocked = self.preflight(action, cwd=cwd, allowed_roots=allowed_roots)
+                if blocked is not None:
+                    prepared.append((action, cwd, None, None, None, blocked))
+                    continue
+                tool = self._tools[action.name]
+                context = self._context(cwd, allowed_roots)
+                context.state = {"active_session_id": self._state.get("active_session_id", "")}
+                context.resource_guard = None
+                prepared.append((action, cwd, tool, context, None, None))
+            if before_dispatch is not None:
+                before_dispatch()
+            prepared = [
+                (action, cwd, tool, context, self._logger.record("tool.execute", {
+                    "name": action.name, "arguments": action.arguments,
+                }) if tool else None, blocked)
+                for action, cwd, tool, context, _, blocked in prepared
+            ]
+            outcomes = []
+            with ThreadPoolExecutor(max_workers=len(calls), thread_name_prefix="saiworks-read") as pool:
+                futures = [pool.submit(tool.run, action, context) if tool else None
+                           for action, _, tool, context, _, _ in prepared]
+                for item, future in zip(prepared, futures):
+                    action, cwd, tool, context, event, blocked = item
+                    try:
+                        if future is None:
+                            result = self._result_packager.package(blocked)
+                            if result.error_code != "blocked_by_security_policy":
+                                result.metadata.setdefault("action_arguments", dict(action.arguments))
+                            result_event = self._record_result(result)
+                            self._attach_action_artifact_ref(result, result_event)
+                            outcomes.append(ToolExecution(result, ExecutionPhase.NOT_STARTED))
+                            continue
+                        result = future.result()
+                        before = self._merge_read_observations(context, generation)
+                        outcomes.append(self._finish_execution(
+                            action, cwd, tool, context, result, event, before, None))
+                    except BaseException as error:
+                        # Drain every admitted read; the action flow raises after committing outcomes.
+                        outcomes.append(error)
+            return outcomes
+        finally:
+            self._execution_lock.release()
+
+    def _merge_read_observations(self, context, generation) -> dict[str, int]:
+        # Reset and merge share the generation lock; cancelled reads cannot restore cleared state.
+        with self._state_lock:
+            before = {path: len(entry.get("observations", []))
+                      for path, entry in self._state.get("read_files", {}).items()}
+            if generation == self._state_generation:
+                for path, entry in context.state.get("read_files", {}).items():
+                    current = self._state.setdefault("read_files", {}).setdefault(
+                        path, {"path": path, "observations": []})
+                    current["sha256"] = entry.get("sha256", "")
+                    current["mtime_ns"] = entry.get("mtime_ns", 0)
+                    current["observations"].extend(entry.get("observations", []))
+            return before
 
     def _bind_visible_read_state(
         self, before: dict[str, int], observation_id: str, result: ToolResult, raw_output: str,
