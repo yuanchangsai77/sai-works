@@ -34,8 +34,11 @@ Manager 管理连接与客户端复用；Transport 处理传输；Client 处理�
 
 补齐公网兼容性、能力风险描述、资源上下文及来源访问验证。远端 MCP 调用不等于通用 Remote Execution Target；后者还有主体、目标、容量和生命周期问题。
 
-代码依据：src/saiworks/mcp/client.py、transport.py、manager.py、discovery.py、adapter.py、provider.py、capabilities/mcp_source.py。
 
 ## 实现细节的权威参考
 
 协议支持集合、稳定名称与资源 ID、风险折叠和大小限制集中在[MCP 当前适配参考](../reference/mcp-adapter.md)。接入文档只维护责任链与差距，不重复所有配置和字段。
+
+实现依据：[mcp_source.py](../../src/saiworks/capabilities/mcp_source.py)、[client.py](../../src/saiworks/mcp/client.py)。
+
+回归入口：[test_mcp_runtime_hardening.py](../../tests/test_mcp_runtime_hardening.py)。

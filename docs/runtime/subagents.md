@@ -30,4 +30,6 @@ runner 校验输出、blocker、证据与引用后形成唯一终态，投影到
 
 未来远程任务适配需复用任务、授权和证据语义，本地记录不能冒充远端权威状态。长期 worker、资源租约与跨节点故障恢复见[执行目标设计](../design/execution-targets.md)。
 
-代码依据：src/saiworks/orchestration/subagents.py、subagent_runner.py、sessions/cluster.py、tools/subagents.py。
+实现依据：[subagent_runner.py](../../src/saiworks/orchestration/subagent_runner.py)、[subagents.py](../../src/saiworks/tools/subagents.py)。
+
+回归入口：[test_subagent_session_clusters.py](../../tests/test_subagent_session_clusters.py)。

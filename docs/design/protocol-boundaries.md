@@ -1,4 +1,4 @@
-# 系统协议边界
+# 系统协议边界设计
 
 状态：目标边界梳理，不定义新消息字段、错误码或 transport。
 
@@ -22,6 +22,6 @@
 
 ## 当前契约与变更
 
-[工具契约](../reference/tool-contract.md)、[配置参考](../reference/configuration.md)、[模型传输契约](../reference/model-transport-contract.md)继续描述现行行为。壳接口的职责地图不是方法清单。
+[工具契约](../reference/tool-contract.md)、[配置参考](../reference/configuration.md)、[模型传输契约](../reference/model-transport-contract.md)继续描述现行行为。界面接口的职责地图不是方法清单。
 
-涉及 App、Cloud、Agent 请求或响应字段、错误码及语义变化，需要单独说明影响并确认；本轮文档改写不实施这些契约变更。
+涉及 App、Cloud、Agent 请求或响应字段、错误码及语义变化，需要单独说明影响并确认；本设计不实施这些契约变更。

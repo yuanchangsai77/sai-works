@@ -1,4 +1,4 @@
-# 参考：Tool 字段契约
+# 工具字段契约参考
 
 ## 文档职责
 
@@ -163,3 +163,7 @@ session history 和 tool result 随后进入 `ContextPackager`，由 packager �
 不应假设 `output` 必然完整进入最终 prompt。
 
 `ConsolePresenter` 展示 run summary 时，通过 `ToolRegistry.summarize_result()` 调用 tool 本地 summarizer。这个 summarizer 不属于 tool schema，不进入 model prompt，不进入 `ToolResult.metadata`。
+
+实现依据：[types.py](../../src/saiworks/types.py)、[result_packager.py](../../src/saiworks/tools/result_packager.py)。
+
+回归入口：[test_builtin_tool_registry_and_execution.py](../../tests/test_builtin_tool_registry_and_execution.py)。

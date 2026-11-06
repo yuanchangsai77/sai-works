@@ -8,6 +8,8 @@
 | [持久化接受](runtime-acceptance.md) | 内部提交去重、绑定上下文与独立任务记录 |
 | [任务观察](runtime-observation.md) | 同进程 Task 快照、持久化修订、多观察者及交付可见性 |
 | [任务控制与审批](runtime-control.md) | 同进程控制句柄、按 Task 取消接受点与可核对审批记录 |
+| [工具执行与生命周期](tool-execution.md) | 执行阶段、隔离读取、取消与本地资源清理 |
+| [MCP 生命周期](mcp-lifecycle.md) | 连接代际、并发交换及关闭失败边界 |
 | [工具契约](tool-contract.md) | 模型可见结果、结构化运行信息与展示摘要 |
 | [Skill 文件](skill-format.md) | 安装目录、最小格式、覆盖与解析限制 |
 | [MCP 适配](mcp-adapter.md) | 协议、名称、资源 ID、风险与大小边界 |
@@ -15,4 +17,4 @@
 | [模型传输](model-transport-contract.md) | 调用生命周期、动作通道、流式、取消与关联要求 |
 | [运行日志与会话追踪](observability.md) | run/session 文件位置、关联方法、事件阅读与安全限制 |
 
-工具和模型传输语义在本轮保持不变；仅更新归属和文档引用。模型端点责任是对接要求，实际实现与验收由端点负责。目标协议设计见[协议边界](../design/protocol-boundaries.md)。
+模型端点责任是对接要求，实际实现与验收由端点负责。当前参考不能替代端点的实现证据，目标协议设计见[协议边界](../design/protocol-boundaries.md)。

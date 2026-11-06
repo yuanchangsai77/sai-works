@@ -1,4 +1,4 @@
-# Execution Runtime
+# 受控执行运行时
 
 状态：领域基线与当前实现。负责把动作提案变成受约束的现实操作，保持结果、观察和副作用边界可检查。
 
@@ -42,6 +42,8 @@ MCP 的远端调用不能被描述为已完成通用 Remote Runtime。Shell 进�
 
 Executor 不能自主批准动作，也不能把 Agent Loop 藏在内部扩大预算与权限。执行结果声明成功不自动满足任务完成要求；Evidence & Recovery 域决定哪些证据仍有效。
 
-目标层演进见[执行目标设计](../design/execution-targets.md)，Shell 具体语义见[Shell 适配](shell.md)，授权见[Policy](policy.md)。
+目标层演进见[执行目标设计](../design/execution-targets.md)，Shell 具体语义见[Shell 适配](shell.md)，授权见[执行策略](policy.md)。
 
-代码依据：src/saiworks/tools/registry.py、schema_validation.py、result_packager.py、orchestration/engine.py、mcp/adapter.py。
+实现依据：[registry.py](../../src/saiworks/tools/registry.py)、[actions.py](../../src/saiworks/orchestration/actions.py)。
+
+回归入口：[test_tool_execution_receipts.py](../../tests/test_tool_execution_receipts.py)、[test_parallel_local_reads.py](../../tests/test_parallel_local_reads.py)。

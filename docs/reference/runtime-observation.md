@@ -1,6 +1,6 @@
-# Runtime 同进程任务观察（D1）
+# 任务快照与观察参考
 
-范围：同进程任务查询及多观察者。控制句柄、按 Task 取消与审批记录见[任务控制与审批](runtime-control.md)；独立服务生命周期属于 E，不在本接口中承诺。
+范围：同进程任务查询及多观察者。控制句柄、按 Task 取消与审批记录见[任务控制与审批](runtime-control.md)；独立服务生命周期属于独立运行服务，不在本接口中承诺。
 
 ## 接口与资格
 
@@ -22,4 +22,8 @@ delivery_state 区分 not_required、pending、completed。会话型或延迟交
 
 ## 数据兼容
 
-任务库增量升级到 user_version=2，增加每 Task 修订记录及提交交付字段；旧记录升级为记录版本 2，查询仍支持版本 1/2。Session JSON、ExecutionSummary、工具及模型格式不变。新程序拒绝未知数据库版本。旧程序不能读版本 2 的任务记录，升级前必须停止旧写入进程，不能并行使用旧程序写任务库；不承诺旧程序只读回退。升级事务失败保持原库可用，升级不执行任何旧任务。
+同进程任务观察最初在任务库版本 2 引入每 Task 修订记录及提交交付字段；当前库版本和全部升级门禁统一见[数据兼容](runtime-control.md#数据兼容)，不能据本页阶段描述使用旧写入程序。旧记录升级为记录版本 2，查询仍支持版本 1/2。Session JSON、ExecutionSummary、工具及模型格式不变。新程序拒绝未知数据库版本。旧程序不能读版本 2 的任务记录，升级前必须停止旧写入进程，不能并行使用旧程序写任务库；不承诺旧程序只读回退。升级事务失败保持原库可用，升级不执行任何旧任务。
+
+实现依据：[runtime_observation.py](../../src/saiworks/runtime_observation.py)、[tasks.py](../../src/saiworks/sessions/tasks.py)。
+
+回归入口：[test_runtime_observation.py](../../tests/test_runtime_observation.py)。

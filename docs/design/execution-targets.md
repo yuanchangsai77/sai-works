@@ -1,6 +1,6 @@
-# Execution Target 与分布式演进
+# 执行目标与分布式设计
 
-状态：目标设计。当前本地工具与 MCP 适配见[Execution Runtime](../runtime/execution-runtime.md)。
+状态：目标设计。当前本地工具与 MCP 适配见[受控执行运行时](../runtime/execution-runtime.md)。
 
 ## 目标模型
 

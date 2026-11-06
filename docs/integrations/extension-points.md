@@ -1,6 +1,6 @@
 # 接入扩展点
 
-状态：当前内部扩展边界。这里讨论来源和适配，不是 CLI/TUI/Desktop 控制 Runtime 的接口数量。
+状态：当前内部扩展边界。这里讨论来源和适配，不是 CLI/TUI/桌面应用控制 Runtime 的接口数量。
 
 | 扩展点 | 当前责任 | 边界 |
 | --- | --- | --- |
@@ -13,4 +13,8 @@
 
 新来源优先适配现有能力模型与结果路径，不建立专属审批、会话或日志旁路。内部扩展点可以直接调用，跨进程来源才需要传输适配。
 
-代码依据：src/saiworks/orchestration/ext.py、tools/base.py、capabilities/source.py、mcp/provider.py。交互控制边界见[壳与内核](../interfaces/runtime-boundary.md)。
+交互控制边界见[交互界面与运行时](../interfaces/runtime-boundary.md)。
+
+实现依据：[ext.py](../../src/saiworks/orchestration/ext.py)、[source.py](../../src/saiworks/capabilities/source.py)。
+
+回归入口：[test_capability_warehouse.py](../../tests/test_capability_warehouse.py)。

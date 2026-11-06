@@ -1,4 +1,4 @@
-# Capability
+# 能力发现与生命周期
 
 状态：领域基线与当前实现。Capability 是 Execution Core 的核心领域；MCP、Skill 和本地工具是能力来源与适配形式。
 
@@ -42,6 +42,10 @@ MCP 提供协议描述与调用；Skill 提供工作指令及关联能力；本�
 
 ## 目标与差距
 
-下一步完善资源包与操作生命周期、能力和目标的绑定、资源上下文预算及来源校验。无需重建第二个 Registry，优先复用现有 warehouse、source 和工具执行路径。
+完整资源包与操作生命周期、能力和目标的绑定、资源上下文预算及来源校验仍有缺口；工作状态统一见[路线图](../roadmap.md)。无需重建第二个 Registry，优先复用现有 warehouse、source 和工具执行路径。
 
-代码依据：src/saiworks/capabilities/model.py、warehouse.py、source.py、local_source.py、mcp_source.py。接入细节见[MCP](../integrations/mcp.md)、[Skill](../integrations/skills.md)。
+接入细节见[MCP](../integrations/mcp.md)、[Skill](../integrations/skills.md)。
+
+实现依据：[warehouse.py](../../src/saiworks/capabilities/warehouse.py)、[source.py](../../src/saiworks/capabilities/source.py)。
+
+回归入口：[test_capability_warehouse.py](../../tests/test_capability_warehouse.py)。

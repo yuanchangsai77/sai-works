@@ -22,4 +22,6 @@ Shell 命令仍受执行风险、资源约束、审批及内容扫描影响。�
 
 需要资源隔离时应由执行目标提供实际容器或系统限制；当前机制不宣称已有统一沙盒。目标语义见[执行目标](../design/execution-targets.md)。
 
-代码依据：src/saiworks/tools/builtins/shell_exec.py、tools/shared.py、orchestration/engine.py。
+实现依据：[shell_exec.py](../../src/saiworks/tools/builtins/shell_exec.py)、[process_lifecycle.py](../../src/saiworks/tools/process_lifecycle.py)。
+
+回归入口：[test_shell_lifecycle.py](../../tests/test_shell_lifecycle.py)。

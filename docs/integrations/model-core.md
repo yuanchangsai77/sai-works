@@ -20,4 +20,6 @@ SaiWorks 构造任务工作集，表达推理与动作协议要求，消费自�
 
 跨项目契约需要双方权威文档与兼容性核对；本页不新增字段、错误码或能力发现端点。Model Core 的 2026-09-30 文档是目标架构基线，不可作为所有能力已完成的证据。
 
-代码依据：src/saiworks/model/client.py、protocol.py、prompt.py、parser.py、streaming.py、app.py。
+实现依据：[client.py](../../src/saiworks/model/client.py)、[parser.py](../../src/saiworks/model/parser.py)。
+
+回归入口：[test_model_client_prompt_and_parser_protocol.py](../../tests/test_model_client_prompt_and_parser_protocol.py)。

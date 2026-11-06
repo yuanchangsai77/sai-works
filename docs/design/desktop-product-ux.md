@@ -1,20 +1,20 @@
-# SaiWorks Desktop 产品功能与 UI/UX 设计
+# SaiWorks 桌面应用产品功能与 UI/UX 设计
 
 - 日期：2026-10-02
-- 状态：目标设计，作为 Desktop 后续实施与验收基线
-- 依赖：[壳与内核边界](shell-core-boundary.md)、[Desktop V0.1](desktop-v0.md)、[运行日志与会话追踪](../reference/observability.md)
+- 状态：目标设计，作为桌面应用后续实施与验收基线
+- 依赖：[交互界面与运行时边界](interface-runtime-boundary.md)、[桌面应用](desktop-scope.md)、[运行日志与会话追踪](../reference/observability.md)
 
 ## 1. 产品定义
 
-SaiWorks Desktop 是本地执行型 Agent 的工作台，不只是聊天窗口。它把“提出目标—观察计划—授予权限—理解执行—核对结果—恢复任务”组织成普通用户可理解的连续体验，同时保持 CLI、TUI 与 Desktop 共用同一 Runtime 权威语义。
+SaiWorks 桌面应用是本地执行型 Agent 的工作台，不只是聊天窗口。它把“提出目标—观察计划—授予权限—理解执行—核对结果—恢复任务”组织成普通用户可理解的连续体验，同时保持 CLI、TUI 与桌面应用共用同一 Runtime 权威语义。
 
-Desktop 的价值不是隐藏一切，而是按需呈现复杂度：默认页面简洁；发生工具执行、等待审批、部分失败或恢复时，提供足够的事实和下一步，而不要求用户读取 JSON、记住斜杠命令或打开终端。
+桌面应用的价值不是隐藏一切，而是按需呈现复杂度：默认页面简洁；发生工具执行、等待审批、部分失败或恢复时，提供足够的事实和下一步，而不要求用户读取 JSON、记住斜杠命令或打开终端。
 
 ### 1.1 目标用户
 
 - 想使用本地 Agent，但不熟悉 CLI/TUI 的普通用户。
 - 需要长任务、审批、日志与恢复可见性的专业用户。
-- 同时使用 CLI/TUI/Desktop，希望任务语义一致的现有用户。
+- 同时使用 CLI/TUI/桌面应用，希望任务语义一致的现有用户。
 
 ### 1.2 体验原则
 
@@ -23,7 +23,7 @@ Desktop 的价值不是隐藏一切，而是按需呈现复杂度：默认页面
 3. **执行透明**：正在做什么、为什么需要权限、结果是否已核对必须可见。
 4. **无感恢复**：可自动恢复的情况自动完成；需要决定时给出明确选择和后果。
 5. **身份明确**：产品审批主体始终是 SaiWorks Runtime；系统宿主归属另行解释。
-6. **壳不造事实**：任务状态、审批有效性、工具结果和会话持久化来自 Runtime。
+6. **界面不造事实**：任务状态、审批有效性、工具结果和会话持久化来自 Runtime。
 
 ## 2. 产品范围
 
@@ -43,8 +43,8 @@ Desktop 的价值不是隐藏一切，而是按需呈现复杂度：默认页面
 
 ### 2.2 非目标
 
-- Desktop 不创建第二套任务状态机、审批缓存或日志格式。
-- 不在 V0.1 承诺窗口关闭后任务继续运行；该能力依赖独立 Runtime。
+- 桌面应用不创建第二套任务状态机、审批缓存或日志格式。
+- 不在桌面参考应用承诺窗口关闭后任务继续运行；该能力依赖独立 Runtime。
 - 不以“自动执行更多命令”代替好体验；低价值探测和重复审批应由策略与任务设计减少。
 - 不在 UI 中直接编辑秘密；凭据由受保护配置或系统凭据能力承载。
 
@@ -75,7 +75,7 @@ Workspace
 ## 4. 信息架构
 
 ```text
-SaiWorks Desktop
+SaiWorks 桌面应用
 ├── Home / 工作区入口
 ├── Workspace
 │   ├── Sessions / 会话列表
@@ -233,7 +233,7 @@ Technical details ›   Open logs ›   Copy support bundle ›
 
 ### 6.7 Command Palette / Quick Actions
 
-`⌘K` 打开统一命令面板，作为 CLI/TUI 到 Desktop 的渐进式专业入口：
+`⌘K` 打开统一命令面板，作为 CLI/TUI 到桌面应用的渐进式专业入口：
 
 - 切换工作区、新建任务、恢复最近任务。
 - 查看当前 Activity、取消当前任务、打开诊断。
@@ -254,7 +254,7 @@ Technical details ›   Open logs ›   Copy support bundle ›
 | Completed | 已完成 | 绿色 | 查看结果、继续 |
 | Blocked | 需要你的选择 | 琥珀色 | 处理建议 |
 | Runtime error | 运行失败 | 红色 | 重试、诊断 |
-| Disconnected | Runtime 已断开 | 灰色 | 重连（阶段 D/E） |
+| Disconnected | Runtime 已断开 | 灰色 | 重连（阶段跨界面同步与独立运行服务） |
 
 颜色不能是唯一信号；所有状态同时使用图标、文字和可访问名称。
 
@@ -322,7 +322,7 @@ Activity 使用纵向 execution rail 作为 SaiWorks 的标志性组件：
 - 文案进入资源层，初期至少保证中文和英文布局不截断。
 - 时间默认显示本地时区，详情中保留 UTC run ID。
 
-## 11. Desktop 与 Runtime 的接口要求
+## 11. 桌面应用与 Runtime 的接口要求
 
 目标 UI 需要稳定的只读投影，而不是读取 Engine：
 
@@ -333,11 +333,11 @@ Activity 使用纵向 execution rail 作为 SaiWorks 的标志性组件：
 - `RunDiagnostic`：run 关联、事件摘要、blocker、日志引用。
 - `ApprovalView`：意图、动作、风险、参数摘要、有效期。
 
-V0.1a 可在同进程 controller 上实现查询适配；运行中换壳、订阅和断线恢复必须等待阶段 D 的 snapshot/revision 契约。UI 不直接扫描 `.saiworks` 来构造权威状态。
+桌面参考应用可在同进程 controller 上实现查询适配；运行中换界面、订阅和断线恢复必须等待跨界面同步与可恢复审批的 snapshot/revision 契约。UI 不直接扫描 `.saiworks` 来构造权威状态。
 
 ## 12. 技术形态决策
 
-Tk 版本继续作为行为原型和低成本回归壳，不作为最终视觉技术承诺。进入生产 Desktop 前对以下方案做一次有界 spike：
+Tk 版本继续作为行为原型和低成本回归界面，不作为最终视觉技术承诺。进入生产桌面应用前对以下方案做一次有界 spike：
 
 - 原生 SwiftUI：macOS 身份、TCC、菜单、无障碍和打包最好；跨平台成本高。
 - Tauri：体积与 Web UI 表达平衡；需要本地 Runtime IPC 边界。
@@ -346,9 +346,11 @@ Tk 版本继续作为行为原型和低成本回归壳，不作为最终视觉�
 
 选型验收不看静态截图，至少验证会话列表、长对话、实时 Activity、审批、diff、诊断、键盘/VoiceOver、打包签名和自动更新。
 
-## 13. 分阶段实施
+## 13. 产品范围分层
 
-### Phase 1：可用工作台
+以下是产品能力分层，不表示逐项实现进度；当前交付和依赖见[路线图](../roadmap.md)。
+
+### 基础工作台
 
 - 两栏主框架、Task 导航、多行输入、消息渲染、紧凑进度卡与 contextual Activity panel。
 - 首次启动模型检测和模型 slug 选择。
@@ -356,13 +358,13 @@ Tk 版本继续作为行为原型和低成本回归壳，不作为最终视觉�
 - 审批卡明确主体、范围与风险。
 - `⌘K` Command Palette 覆盖核心导航与控制动作。
 
-### Phase 2：任务与恢复
+### 任务与恢复
 
 - TaskSnapshot/revision、稳定取消、运行中恢复、待审批中心。
 - 会话搜索、重命名、归档；用户会话与测试/临时会话隔离。
 - Artifact/diff/证据查看器。
 
-### Phase 3：正式桌面产品
+### 桌面产品发布
 
 - 独立 Runtime/Gateway、窗口退出后续跑与重连。
 - `.app` 打包、Bundle ID、签名、公证、更新和系统权限说明。
@@ -376,6 +378,6 @@ Tk 版本继续作为行为原型和低成本回归壳，不作为最终视觉�
 - 审批前能看懂动作主体、范围和后果；拒绝后不重复执行。
 - 关闭、取消、恢复的状态文案与 Runtime 事实一致。
 - 200 条消息、长 Markdown、diff 和持续进度下仍保持可操作。
-- CLI/TUI/Desktop 对同一任务的终态、审批与会话结果一致。
+- CLI/TUI/桌面应用对同一任务的终态、审批与会话结果一致。
 - 空闲和简单问答时 Activity 不占据永久第三栏；任务执行时用户一步可展开完整 execution rail。
 - Conversation 不承载唯一的 Activity、Artifact 或 Result 事实；长任务无需滚动整段聊天才能判断完成情况。

@@ -1,4 +1,4 @@
-# Workspace
+# 工作区与资源范围
 
 状态：领域基线与当前实现。Workspace 是 Agent 获得资源、能力和约束的运行环境；当前路径与会话状态是它的实现起点，不是完整目标对象。
 
@@ -28,7 +28,7 @@ Workspace 关联资源、文件、仓库、运行环境、权限、秘密引用�
 
 软件项目规则、摘要、显式上下文和测试命令探测是当前 Workspace 的场景适配，不应成为通用内核的必选功能。相关加载和预算见[上下文](context.md)。
 
-切换活动根时持久 Shell 需要跟随新的默认环境；普通 Shell 内部 cd 不等于打开 Workspace，见[Shell](shell.md)。
+切换活动根时持久 Shell 需要跟随新的默认环境；普通 Shell 内部 cd 不等于打开 Workspace，见[命令执行环境](shell.md)。
 
 ## 目标与差距
 
@@ -36,4 +36,6 @@ Workspace 关联资源、文件、仓库、运行环境、权限、秘密引用�
 
 验收应覆盖跨工作空间同名文件不复用旧观察、恢复不丢失约束、不从授权路径推导任意动作权限。当前路径机制不能被扩写为资源隔离保证。
 
-代码依据：src/saiworks/types.py、context/workspace.py、orchestration/permissions.py、tools/builtins/workspace_open.py、interaction/cli.py。
+实现依据：[permissions.py](../../src/saiworks/orchestration/permissions.py)、[workspace_open.py](../../src/saiworks/tools/builtins/workspace_open.py)。
+
+回归入口：[test_session_workspace_lifecycle.py](../../tests/test_session_workspace_lifecycle.py)。

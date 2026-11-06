@@ -35,3 +35,7 @@
 主动脱离会话的子进程不在进程组停止证明范围内。其他平台只提供直接子进程关闭能力，不宣称完整子进程树已停止。远端操作也不能通过本地连接关闭证明停止。上述未知结果必须继续保留恢复门禁。
 
 扫描 `/proc` 时，目录已列出但进程随后消失所产生的 FileNotFoundError 或 ProcessLookupError 均按该进程不存在继续检查；权限错误和其他异常仍保留为清理失败，不把无法检查当作已停止。
+
+实现依据：[registry.py](../../src/saiworks/tools/registry.py)、[process_lifecycle.py](../../src/saiworks/tools/process_lifecycle.py)。
+
+回归入口：[test_tool_execution_receipts.py](../../tests/test_tool_execution_receipts.py)、[test_parallel_local_reads.py](../../tests/test_parallel_local_reads.py)。

@@ -1,4 +1,4 @@
-# 壳与内核边界
+# 交互界面与运行时边界
 
 状态：当前边界梳理与待实现设计，2026-09-30。本文不是已发布接口契约，不新增请求字段、错误码、方法签名或 transport。
 
@@ -6,13 +6,13 @@
 
 应用提供无终端的 Runtime 装配，现有应用入口继续返回 CLI 适配。CLI/TUI 调用 Runtime 协调运行、会话、压缩、能力和政策；显示与补全消费脱离内核可变对象的查询投影。运行进度复用既有抽象；审批仍通过同步回调适配。子代理工厂直接装配独立 Runtime。
 
-已具备同进程无终端门面、单执行槽、任务接受与结果查询，以及 D1 的 Task 一致快照、持久化 revision 和多观察者游标；具体入口见[任务观察参考](../reference/runtime-observation.md)。现有壳尚未整体迁移到新观察接口，跨进程 Desktop/IDE/API 的身份、可恢复审批与服务生命周期仍未实现。已有 ContextLoader、ToolProvider、ResourceProvider 属于接入扩展点，不是这里讨论的交互控制边界。
+已具备同进程无终端门面、单执行槽、任务接受与结果查询，以及一致任务快照、持久化修订和多观察者游标；具体入口见[任务观察参考](../reference/runtime-observation.md)。现有界面尚未整体迁移到新观察接口，跨进程桌面应用/IDE/API 的身份、可恢复审批与服务生命周期仍未实现。已有 ContextLoader、ToolProvider、ResourceProvider 属于接入扩展点，不是这里讨论的交互控制边界。
 
-Desktop V0.1a 先作为同进程单壳消费本门面，不因图形界面新建执行或存储旁路。具体产品边界和解锁条件见 [Desktop V0.1](../design/desktop-v0.md)。
+桌面参考应用先作为同进程单界面消费本门面，不因图形界面新建执行或存储旁路。具体产品边界和解锁条件见 [桌面应用](../design/desktop-scope.md)。
 
-Runtime 的观测日志由内核生成并统一写入 `.saiworks/runs/<run_id>/`，不依赖 CLI、TUI 或 Desktop。每次运行至少可从 `events.jsonl` 核对实际模型后端、模型请求/响应（真实客户端）、工具动作和终态；`details.log` 提供脱敏的人类可读摘要。
+Runtime 的观测日志由内核生成并统一写入 `.saiworks/runs/<run_id>/`，不依赖 CLI、TUI 或桌面应用。每次运行至少可从 `events.jsonl` 核对实际模型后端、模型请求/响应（真实客户端）、工具动作和终态；`details.log` 提供脱敏的人类可读摘要。
 
-模型调用失败按事实分类：连接、超时和服务端暂时不可用属于请求可用性问题；已收到响应但其 JSON、结构、动作或工具调用不符合协议时，模型层抛出只携带技术事实的 `ModelProtocolError`。Orchestration 沿异常因果链生成稳定错误码与共享结果说明，壳只负责展示和可用操作，不通过英文错误文本猜测故障类型；模型层不知道 SaiWorks 产品文案、任务操作或诊断入口。
+模型调用失败按事实分类：连接、超时和服务端暂时不可用属于请求可用性问题；已收到响应但其 JSON、结构、动作或工具调用不符合协议时，模型层抛出只携带技术事实的 `ModelProtocolError`。Orchestration 沿异常因果链生成稳定错误码与共享结果说明，界面只负责展示和可用操作，不通过英文错误文本猜测故障类型；模型层不知道 SaiWorks 产品文案、任务操作或诊断入口。
 
 共享失败说明至少区分三类：`ModelRetryableError` 表示模型依赖暂时不可用，`ModelProtocolError` 表示响应不符合协议，其他异常表示 Runtime 未能完成本次运行。协议和未知 Runtime 错误默认需要条件性恢复，不能统一标记为可直接重试，也不能统一宣称模型 API 不可用。
 
@@ -20,7 +20,7 @@ Runtime 的观测日志由内核生成并统一写入 `.saiworks/runs/<run_id>/`
 
 以下六类用于核对职责，不要求恰好六个接口或服务。
 
-| 交互职责 | Runtime 应负责 | 壳应负责 |
+| 交互职责 | Runtime 应负责 | 界面应负责 |
 | --- | --- | --- |
 | 任务与运行 | 接收任务、预算、状态、取消与干预语义 | 收集意图、发送操作、呈现状态 |
 | 会话与恢复 | 会话关联、持久化与恢复检查 | 会话列表与选择交互 |
@@ -33,14 +33,18 @@ Runtime 的观测日志由内核生成并统一写入 `.saiworks/runs/<run_id>/`
 
 先明确运行身份与生命周期、状态查询与事件关联、审批等待与取消、重新连接后的观察、并发运行限制、记录保留与访问约束，再选择传输形式。现有同步调用和回调不能未经评估直接视为远程协议。
 
-同进程 CLI/TUI 可以直接调用；跨进程壳通过适配层使用相同语义。网络层不能另建任务状态、权限逻辑或恢复旁路。
+同进程 CLI/TUI 可以直接调用；跨进程界面通过适配层使用相同语义。网络层不能另建任务状态、权限逻辑或恢复旁路。
 
-任何涉及 App、Cloud、Agent 的字段、错误码或语义变更，先形成兼容性说明并确认。本轮只梳理边界，既有契约保持不变。
+任何涉及 App、Cloud、Agent 的字段、错误码或语义变更，先形成兼容性说明并确认。本文只定义边界，既有契约保持不变。
 
 ## 领域依赖
 
-任务与运行消费[Agent Runtime](../runtime/agent-runtime.md)，操作路径消费[Execution Runtime](../runtime/execution-runtime.md)，授权消费[Policy](../runtime/policy.md)，环境与能力消费[Workspace](../runtime/workspace.md)和[Capability](../runtime/capability.md)，查询与恢复消费[Evidence & Recovery](../runtime/evidence-recovery.md)。壳接口不能重新定义这些领域语义。
+任务与运行消费[智能体运行时](../runtime/agent-runtime.md)，操作路径消费[受控执行运行时](../runtime/execution-runtime.md)，授权消费[执行策略](../runtime/policy.md)，环境与能力消费[工作区与资源范围](../runtime/workspace.md)和[能力发现与生命周期](../runtime/capability.md)，查询与恢复消费[证据与恢复](../runtime/evidence-recovery.md)。界面接口不能重新定义这些领域语义。
 
-当前壳实现见[CLI](cli.md)和[TUI](tui.md)；待协商的跨进程边界见[协议设计](../design/protocol-boundaries.md)。
+当前界面实现见[命令行界面](cli.md)和[终端交互界面](tui.md)；待协商的跨进程边界见[协议设计](../design/protocol-boundaries.md)。
 
-常驻与多壳同步的待实现行为见[边界设计](../design/shell-core-boundary.md)，当前能力映射和分阶段迁移见[实施计划](../design/shell-core-migration.md)。两份文档不定义现行 API。
+常驻与多界面同步的待实现行为见[边界设计](../design/interface-runtime-boundary.md)，当前工作与依赖见[路线图](../roadmap.md)。两份文档不定义现行 API。
+
+实现依据：[runtime.py](../../src/saiworks/runtime.py)、[app.py](../../src/saiworks/app.py)。
+
+回归入口：[test_headless_runtime.py](../../tests/test_headless_runtime.py)。

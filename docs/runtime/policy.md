@@ -1,4 +1,4 @@
-# Policy & Permission
+# 执行策略与授权
 
 状态：领域基线与当前实现。执行权限回答某个主体在给定条件下是否可以对某个资源执行某个操作；可访问连接只是输入事实。
 
@@ -32,12 +32,14 @@ Shell 的明显破坏性命令会提升风险。当前识别是有限规则，�
 
 ## 人的决定与无感运行
 
-策略允许时自动运行，不应无故增加确认。需要人的决定时，展示具体动作和授权范围；人的决定由 Runtime 校验，不由壳自行解释或扩大。审批传递与代理是交互机制，不能让模型代替人扩大授权。
+策略允许时自动运行，不应无故增加确认。需要人的决定时，展示具体动作和授权范围；人的决定由 Runtime 校验，不由界面自行解释或扩大。审批传递与代理是交互机制，不能让模型代替人扩大授权。
 
-当前前台通过同步确认回调接入，后台缺少审批通道时阻塞。跨会话、跨设备可恢复审批仍待设计，见[授权交互](../design/approval.md)。
+当前前台通过同步确认回调接入，后台缺少审批通道时阻塞。同进程可恢复审批已有[确认设计](../design/approval-resume.md)，挂起与续跑尚未实现；跨设备授权仍需独立设计，见[授权交互](../design/approval.md)。
 
 ## 目标与差距
 
-下一步明确操作与资源约束、决定有效性、撤销和恢复行为，接入可验证的共享身份事实。来源信任、artifact 访问与注入抵抗需要完整闭环验证，不能把本页原则全部标记为已实现保护。
+尚缺统一主体与目标的策略输入、可验证共享身份、跨设备撤销和恢复闭环；工作状态统一见[路线图](../roadmap.md)。来源信任、artifact 访问与注入抵抗需要完整闭环验证，不能把本页原则全部标记为已实现保护。
 
-代码依据：src/saiworks/safety/policy.py、guardrails.py、content/、orchestration/permissions.py、subagent_runner.py。
+实现依据：[policy.py](../../src/saiworks/safety/policy.py)、[guardrails.py](../../src/saiworks/safety/guardrails.py)。
+
+回归入口：[test_tool_risk_policy.py](../../tests/test_tool_risk_policy.py)、[test_content_safety_interceptor.py](../../tests/test_content_safety_interceptor.py)。

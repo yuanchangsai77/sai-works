@@ -44,3 +44,7 @@ MCP 输出限制之后还接受工具统一结果预算和模型上下文预算�
 恢复连接只恢复访问能力，不证明失败调用没有生效。副作用重试遵循[执行语义](../runtime/execution-runtime.md)，未知结果先核对。
 
 依据：src/saiworks/mcp/client.py、types.py、adapter.py、transport.py、discovery.py、manager.py。配置见[配置参考](configuration.md)，结果字段见[工具契约](tool-contract.md)。
+
+实现依据：[adapter.py](../../src/saiworks/mcp/adapter.py)。
+
+回归入口：[test_mcp_runtime_hardening.py](../../tests/test_mcp_runtime_hardening.py)。

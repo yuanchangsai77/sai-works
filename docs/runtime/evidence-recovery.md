@@ -1,4 +1,4 @@
-# Evidence & Recovery
+# 证据与恢复
 
 状态：领域基线与当前实现。证据支持完成裁决，检查点支持继续运行，历史支持审查；三者不能混为聊天记录。
 
@@ -48,4 +48,6 @@
 
 详细目标见[执行账本设计](../design/execution-ledger.md)。引用访问、保留、完整性和来源校验仍需专项闭环，特别是跨会话材料不能仅凭路径获得读取许可。
 
-代码依据：src/saiworks/types.py、sessions/store.py、observability/logger.py、tools/observation_state.py、orchestration/control.py。
+实现依据：[control.py](../../src/saiworks/orchestration/control.py)、[tasks.py](../../src/saiworks/sessions/tasks.py)。
+
+回归入口：[test_execution_recovery.py](../../tests/test_execution_recovery.py)。

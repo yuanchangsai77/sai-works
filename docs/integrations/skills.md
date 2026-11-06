@@ -20,4 +20,8 @@ references、assets、scripts 应具有索引、来源、预算与加载生命�
 
 同名覆盖、版本冲突和来源优先级需要用户可检查的诊断。恢复按保存能力标识重建工作集，不把旧正文当成永远有效的运行许可。来源变更应明确观察与核对，具体持久字段不在本页新增。
 
-代码依据：src/saiworks/skills/registry.py、parser.py、model.py、capabilities/local_source.py、warehouse.py。核心激活语义见[Capability](../runtime/capability.md)。
+核心激活语义见[能力发现与生命周期](../runtime/capability.md)。
+
+实现依据：[registry.py](../../src/saiworks/skills/registry.py)、[local_source.py](../../src/saiworks/capabilities/local_source.py)。
+
+回归入口：[test_skill_system.py](../../tests/test_skill_system.py)。

@@ -41,3 +41,7 @@ frontmatter 位于文件开头，由两行 --- 包围；正文是工作指令。
 metadata 被发现不代表正文已激活，更不代表获得执行许可。references、assets、scripts 的目录存在不表示已经支持完整资源包激活或自动脚本执行。
 
 依据：src/saiworks/app.py、skills/registry.py、skills/parser.py、capabilities/local_source.py。
+
+实现依据：[parser.py](../../src/saiworks/skills/parser.py)、[registry.py](../../src/saiworks/skills/registry.py)。
+
+回归入口：[test_skill_system.py](../../tests/test_skill_system.py)。

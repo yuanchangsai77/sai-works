@@ -9,3 +9,7 @@
 关闭逐个尝试客户端和 SSE 活动连接。失败实例保留供重试，同一服务器在失败清理完成前不得重建客户端。连接在网络建立前进入清理归属，部分建立失败后仍可关闭。Stdio 的本地进程组清理复用[工具执行与资源生命周期](tool-execution.md)；不同平台的保证范围也相同。
 
 HTTP 404 会话过期的只读恢复使用内部会话重置，与实例永久关闭区分。`tools/call` 不在失效或断线后自动重放。本地连接关闭、响应等待结束和服务器接受取消，都不能单独证明远端副作用已停止。
+
+实现依据：[manager.py](../../src/saiworks/mcp/manager.py)、[transport.py](../../src/saiworks/mcp/transport.py)。
+
+回归入口：[test_mcp_lifecycle.py](../../tests/test_mcp_lifecycle.py)。

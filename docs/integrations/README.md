@@ -9,4 +9,4 @@
 | Model Core | [模型依赖](model-core.md) | 推理调用与动作响应适配，平台资源管理归独立仓库 |
 | 内部来源扩展 | [扩展点](extension-points.md) | 候选上下文、可注册工具、资源与能力来源 |
 
-能力目录、激活和释放由[Capability](../runtime/capability.md)定义。访问身份与连接由[共享信任域](../design/trust-domain.md)定义目标边界。接入不创建第二套 Agent 或审批逻辑。
+能力目录、激活和释放由[能力发现与生命周期](../runtime/capability.md)定义。访问身份与连接由[共享信任域](../design/trust-domain.md)定义目标边界。接入不创建第二套 Agent 或审批逻辑。

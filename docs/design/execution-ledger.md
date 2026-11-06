@@ -1,6 +1,6 @@
-# Execution Ledger
+# 执行账本设计
 
-状态：目标设计。当前证据与恢复机制见[Evidence & Recovery](../runtime/evidence-recovery.md)。
+状态：目标设计。当前证据与恢复机制见[证据与恢复](../runtime/evidence-recovery.md)。
 
 ## 目标事实链
 

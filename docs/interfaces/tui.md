@@ -1,4 +1,4 @@
-# TUI 交互壳
+# 终端交互界面
 
 状态：当前实现与验收边界。TUI 是内联终端展示适配，不拥有任务、授权或恢复的第二套状态。
 
@@ -18,7 +18,7 @@ TUIController 消费事件队列并维护展示投影，TUIRenderer 生成终端
 
 只有交互模式且 stdin、stdout 都是 TTY 时选择 TUI。正常单次执行（--once）、重定向、非 TTY 和通常的 CI 环境使用 ConsolePresenter 逐行输出；是否使用 TUI 取决于模式和 TTY 检测，不单独依赖 CI 环境变量。流式自然语言在不可回写输出中失败时，需要明确标记已显示片段未被采纳。
 
-会话选择、斜杠命令补全和编辑历史是壳功能。补全查看目录不应触发远端发现或激活；选择能力后仍经 Runtime 路径。
+会话选择、斜杠命令补全和编辑历史是界面功能。补全查看目录不应触发远端发现或激活；选择能力后仍经 Runtime 路径。
 
 ## 增量与失败
 
@@ -28,10 +28,12 @@ TUIController 消费事件队列并维护展示投影，TUIRenderer 生成终端
 
 ## 审批与取消
 
-TUI 展示具体操作并转交决定，Runtime 验证其范围。当前仍是同步确认适配，跨壳可恢复审批见[授权交互设计](../design/approval.md)。用户中断必须传播到引擎和活动执行，而非只清除界面。
+TUI 展示具体操作并转交决定，Runtime 验证其范围。当前仍是同步确认适配，跨界面可恢复审批见[授权交互设计](../design/approval.md)。用户中断必须传播到引擎和活动执行，而非只清除界面。
 
-## 演进方向
+## 验收范围
 
-优先稳定事件与终态一致、增量失败清理、审批中断及终端兼容，再扩展 overlay 和历史查询。交互体验不成为独立内核，具体优先级见[路线图](../roadmap.md)。
+事件与终态一致、增量失败清理、审批中断及终端兼容分别需要真实终端证据；存在演示不表示这些场景已验收。是否扩展 overlay 和历史查询由[路线图](../roadmap.md)管理，不在本页另排开发顺序。
 
-代码依据：src/saiworks/interaction/tui.py、tui_events.py、tui_state.py、terminal.py。
+实现依据：[tui.py](../../src/saiworks/interaction/tui.py)、[tui_state.py](../../src/saiworks/interaction/tui_state.py)。
+
+回归入口：[test_tui_runtime.py](../../tests/test_tui_runtime.py)。

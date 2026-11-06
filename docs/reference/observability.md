@@ -1,10 +1,10 @@
 # 运行日志与会话追踪
 
 - 状态：当前实现参考
-- 适用：CLI、TUI、Desktop 共用 Runtime
+- 适用：CLI、TUI、桌面应用共用 Runtime
 - 数据根目录：当前启动目录下的 `.saiworks/`
 
-本页说明现有文件与查看方法，不把日志描述成完整审计账本。日志由 Runtime 生成，不归属于某个交互壳。
+本页说明现有文件与查看方法，不把日志描述成完整审计账本。日志由 Runtime 生成，不归属于某个交互界面。
 
 ## 1. 文件位置
 
@@ -70,15 +70,19 @@ less ".saiworks/sessions/<session_id>.json"
 逐轮轨迹的结果摘要带有有界调用参数及已有结果归档引用，恢复时按部分证据投影，不当作完整文件内容。
 `safety.approval.wait_seconds` 记录同步审批等待时长；显式启用总运行时间上限时，该等待不消耗执行时间预算，请求超时、HTTP 失败和退避仍计入其中。这些传输尝试应与有效回复轮次分开统计。
 
-## 4. 当前最新真实 Desktop 记录
+## 4. 桌面应用诊断投影
 
-截至 2026-10-02，本次核对的 Desktop session 为 `20261001163052318835-460bda3d`，最近 run 为 `2026-10-01T17-02-42.471782+00-00`。请求“继续”已取得真实 `model.response`，但响应未满足 native tools 严格 JSON 字段约束，最终为 `runtime_error`；这不是 Desktop 丢失回复，也不是连接失败。
+参考窗口已有当前运行诊断和打开日志目录入口；它消费 Runtime 事实，不重新计算执行终态。界面范围见[桌面应用](../interfaces/desktop.md)，旧协议故障只作为[历史诊断示例](../archive/audits/2026-11-04-shell-core-audit.md#历史-desktop-协议诊断示例2026-10-02)保留，不代表当前最新运行或现行协议限制。
 
 ## 5. 安全与限制
 
 - 日志经过脱敏与大字段外置，但仍可能包含工作区路径、命令摘要和用户输入；不要直接公开整个 `.saiworks` 目录。
 - `events.jsonl` 是诊断索引，部分完整内容只保存在 artifact；并非所有 provider 原始响应都会持久化全文。
 - 日志不是不可篡改审计记录，也不等价于完整 Execution Ledger。
-- Desktop 目标态应提供内置诊断视图和“打开日志目录”，普通用户不应依赖终端命令定位故障。
+- 桌面应用已有诊断与日志入口，但不等于完整账本、跨端查询或所有 GUI 故障已经验收。
 
 观察恢复读取独立索引和对应材料，校验会话、授权范围、内容哈希及引用路径。损坏或越界记录跳过；归档写入失败不生成可用引用。模型请求的 `context_package.observation_views` 记录实际入选的观察、正文完整性、可见范围和引用可见性，不能用归档存在代替模型可见。内部观察载荷不重复写入普通工具事件的大型材料。
+
+实现依据：[logger.py](../../src/saiworks/observability/logger.py)、[observations.py](../../src/saiworks/observations.py)。
+
+回归入口：[test_run_logging_and_redaction.py](../../tests/test_run_logging_and_redaction.py)。

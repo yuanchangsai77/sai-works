@@ -1,10 +1,10 @@
-# Runtime 同进程任务控制与审批(D2 批次①)
+# 任务控制与审批参考
 
-范围:同进程任务控制资格、按 Task 取消接受点和可核对审批记录。引擎挂起/续跑、预算连续性、审批消费与旧同步审批适配属于 D2 后续批次;跨进程接入与常驻服务属于 E,不在本接口中承诺。
+范围:同进程任务控制资格、按 Task 取消接受点和可核对审批记录。引擎挂起/续跑、预算连续性、审批消费与旧同步审批适配属于审批等待与续跑设计的后续实现;跨进程接入与常驻服务属于独立运行服务,不在本接口中承诺。
 
 ## 接口与资格
 
-Runtime 的可信装配方调用 `grant_task_control(task_id, permissions, actor="local")` 获取仅含控制资格的不透明本地句柄。permissions 只能是 `cancel`、`approve` 的非空子集,与 actor 标签在授予时固定并由 Runtime 持有,句柄本身不携带权限。`revoke_task_control(control)` 撤销句柄;`Runtime.close()` 撤销该实例全部控制句柄,关闭后不再授予新句柄。外部输入不能调用授予入口;句柄不跨 Runtime 实例或进程传递。接口拒绝伪造、已撤销、其他实例及空壳句柄,不通过角色字符串授予资格。观察句柄(TaskAccess)不能用于控制,控制句柄也不能用于观察。
+Runtime 的可信装配方调用 `grant_task_control(task_id, permissions, actor="local")` 获取仅含控制资格的不透明本地句柄。permissions 只能是 `cancel`、`approve` 的非空子集,与 actor 标签在授予时固定并由 Runtime 持有,句柄本身不携带权限。`revoke_task_control(control)` 撤销句柄;`Runtime.close()` 撤销该实例全部控制句柄,关闭后不再授予新句柄。外部输入不能调用授予入口;句柄不跨 Runtime 实例或进程传递。接口拒绝伪造、已撤销、其他实例及空界面句柄,不通过角色字符串授予资格。观察句柄(TaskAccess)不能用于控制,控制句柄也不能用于观察。
 
 ## 审批记录与决定
 
@@ -18,10 +18,16 @@ Runtime 的可信装配方调用 `grant_task_control(task_id, permissions, actor
 
 有副作用动作若因进程中断停在 `started`，或失败后没有可信内部的未启动证明而进入 `uncertain`，同一 Task 的新副作用动作会暂停；只读动作可继续用于核对。测试命令非零退出同样须核对，失败结果仍保留用于诊断。可信内部核对只能在该 Task 没有运行中提交时登记“已发生”或“未发生”，且必须提供核对主体和非空证据；裁决与证据在同一事务追加保存。已发生的 Shell/测试命令即使只改变超时参数，也不能按同一逻辑动作重放。启动记录同时保存动作指纹与脱敏参数摘要，供日志不可用时核对；不保存原始参数。取消后的工具清理失败不改变已接受结果，后续可重试清理。此机制不向跨端接口新增字段或错误码。
 
-`pending_approvals(control, now=None)` 需要 `approve` 权限,返回该 Task 当前待决审批,返回前对到期记录执行惰性过期转移。`consumed` 目前仅是保留枚举值,批准记录的消费语义在 D2 批次②实施。
+`pending_approvals(control, now=None)` 需要 `approve` 权限,返回该 Task 当前待决审批,返回前对到期记录执行惰性过期转移。`consumed` 目前仅是保留枚举值,批准记录的消费仍待接入审批等待与续跑机制。
 
 请求、决定、取消接受与惰性过期都是权威变化,各自在写事务中递增所属 Task 的 revision,观察者经[任务观察](runtime-observation.md)的 watch 游标可见;幂等重复与无变化操作不递增。审批快照字段是否进入 TaskSnapshot 尚未确认,当前快照结构不变。
+
+文件恢复投影每次运行至多携带 8 条文件现状观察，路径显示限制 240 字符，并明确观察可能失效；这些有界材料不替代执行前校验。
 
 ## 数据兼容
 
 任务库增量升级到 user_version=8；v3 的 approvals 与 task_cancellations 表保留，v4 新增内部 action_attempts 表，v5 增加脱敏参数摘要列；v6 新增内部文件恢复描述与核对证据列；v7 增加追加式观察与裁决证据表；v8 增加领取者身份及未启动动作的崩溃回收证据；旧 v1/v2/v3/v4/v5/v6/v7 库在同一升级事务内迁移，升级事务失败保持原库可用，新程序拒绝未知数据库版本。升级前必须停止旧写入进程，不能并行使用旧程序写任务库；不承诺旧程序只读回退。Session JSON、ExecutionSummary、工具及模型格式不变；引擎同步审批路径保持不变。
+
+实现依据：[runtime.py](../../src/saiworks/runtime.py)、[tasks.py](../../src/saiworks/sessions/tasks.py)。
+
+回归入口：[test_runtime_approval_control.py](../../tests/test_runtime_approval_control.py)、[test_action_journal.py](../../tests/test_action_journal.py)。

@@ -6,13 +6,13 @@ The model proposes actions; SaiWorks checks constraints and permissions, execute
 
 ## Architecture
 
-SaiWorks is the Execution Core in a **2 Core + 1 Shell + 1 Shared Trust Domain** architecture. Model Core evolves independently as the Intelligence Fabric. CLI, TUI and future Desktop/IDE/API interfaces are interaction shells; shared identity, access and connectivity semantics form the Trust Domain.
+SaiWorks 负责受控执行，独立的 Model Core 负责模型推理。命令行、终端和桌面应用是交互界面；共享身份、访问与连接属于独立的信任边界。各部分的职责与目标见总体架构。
 
-Current CLI/TUI share the execution engine, while some session and run coordination still lives in the CLI. A complete shell-independent Runtime interface remains an evolution goal.
+命令行、终端界面和 Tk 桌面参考应用共享无终端依赖的运行时。会话持久化与执行协调归运行时；跨界面的审批等待与续跑、独立运行服务仍是目标能力。
 
 ## Documentation Map
 
-[文档入口](docs/README.md)维护阅读路径、专题归属和状态说明。
+[文档入口](docs/README.md)维护阅读路径、唯一职责和检查规则；当前待办与优先级只维护在路线图。
 
 | 文档 | 职责 |
 | --- | --- |
@@ -21,8 +21,8 @@ Current CLI/TUI share the execution engine, while some session and run coordinat
 | [演进路线](docs/roadmap.md) | 依赖、优先级和验收条件 |
 | [运行时机制](docs/runtime/README.md) | 执行、能力、授权、工作空间、证据与恢复 |
 | [接入机制](docs/integrations/README.md) | MCP、Skill、扩展点和模型调用侧边界 |
-| [交互壳](docs/interfaces/README.md) | 壳与内核边界、CLI/TUI 专项 |
-| [设计地图](docs/design/README.md) | 待实现设计、旧基线和探索材料 |
+| [交互界面](docs/interfaces/README.md) | 交互界面与运行时边界、CLI/TUI/桌面应用现状 |
+| [设计地图](docs/design/README.md) | 专项目标、机制约束与探索材料 |
 | [配置参考](docs/reference/configuration.md) | 运行配置与环境变量 |
 
 使用从本页及配置参考开始；理解架构按“总体架构 → 当前实现 → 演进路线”阅读。目标设计不代替当前契约，版本与历史快照不代表最新实现状态。
@@ -156,7 +156,7 @@ Behavior:
 
 - `SaiWorks` automatically loads `.env` beside the source checkout; an arbitrary
   target workspace's `.env` is not loaded automatically
-- If `SAIWORKS_MODEL_BASE_URL` is still not set, CLI/development calls keep using `StubModelClient`; Desktop stops with a configuration message instead of presenting a demo reply as a real answer
+- If `SAIWORKS_MODEL_BASE_URL` is still not set, CLI/development calls keep using `StubModelClient`; 桌面应用 stops with a configuration message instead of presenting a demo reply as a real answer
 - If `SAIWORKS_MODEL_BASE_URL` is set, `SaiWorks` sends requests to `POST /v1/chat/completions`
 - `SAIWORKS_MODEL_TIMEOUT` defaults to 60 seconds. It is the total timeout for JSON responses and the connection,
   first-byte, and inactivity timeout for SSE; active SSE traffic refreshes the inactivity window.
@@ -265,7 +265,7 @@ classified as destructive. If the same successful tool call is requested again
 within one run, the orchestration layer skips the duplicate instead of asking for
 approval and executing it again.
 
-The model ends a run by returning `done: true`. There is no separate `finish` tool.
+Under `native_tools`, a normal final message ends the model turn; `prompt_json` uses `done: true` with no actions. Runtime still checks completion. There is no separate `finish` tool; see the [model transport contract](docs/reference/model-transport-contract.md).
 
 ## Development
 
@@ -283,10 +283,16 @@ Run the test suite:
 PYTHONPATH=src .venv/bin/python -m pytest -q
 ```
 
-Desktop V0.1a 参考窗口使用 Python 内置 Tk，安装项目后可启动：
+文档变更还须通过结构与维护规则检查；测试套件也会执行同一仓库检查：
+
+```bash
+python3 scripts/check_docs.py
+```
+
+桌面参考应用参考窗口使用 Python 内置 Tk，安装项目后可启动：
 
 ```bash
 sai-works-desktop
 ```
 
-当前为同进程单壳验证版；关闭窗口不承诺任务续跑，跨壳切换与可恢复审批仍属于后续阶段。
+当前为同进程单界面验证版；关闭窗口不承诺任务续跑，跨界面切换与可恢复审批仍属于后续阶段。

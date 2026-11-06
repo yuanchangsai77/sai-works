@@ -1,6 +1,6 @@
-# Runtime 持久化接受记录
+# 任务接受与持久化参考
 
-状态：用户已确认，B/C 已实施并完成相关验收；证据见[阶段核对](../design/shell-core-audit.md)。本参考记录阶段 B/C 的持久化接受，不发布网络 API。
+状态：用户已确认，运行时职责拆分已实施并完成相关验收；证据见[阶段核对](../archive/audits/2026-11-04-shell-core-audit.md)。本参考记录运行时职责拆分的持久化接受，不发布网络 API。
 
 ## 兼容性影响
 
@@ -8,11 +8,11 @@
 
 ## 首版记录
 
-B/C 原始任务记录使用 schema_version=1，包含 task_id、submission_id、session_id（可空）、request_fingerprint、bound_context、state、run_ids、result 和 error。D1 增量升级为版本 2，增加交付状态和每 Task 修订记录，升级及查询语义见[任务观察参考](runtime-observation.md)。result 保存完整终态汇总及其现有 artifact 引用；error 保存异常类型，诊断细节仍归运行日志。bound_context 保存规范化工作区身份、完整输入和已绑定上下文引用；文件路径继续表示执行时读取，提交时内容保证必须使用快照或版本引用。
+最初的任务接受记录使用 schema_version=1，包含 task_id、submission_id、session_id（可空）、request_fingerprint、bound_context、state、run_ids、result 和 error。加入任务观察后，记录升级为版本 2，增加交付状态和每 Task 修订记录，升级及查询语义见[任务观察参考](runtime-observation.md)。result 保存完整终态汇总及其现有 artifact 引用；error 保存异常类型，诊断细节仍归运行日志。bound_context 保存规范化工作区身份、完整输入和已绑定上下文引用；文件路径继续表示执行时读取，提交时内容保证必须使用快照或版本引用。
 
 使用独立 SQLite 文件保存任务记录，以事务和 submission_id 唯一约束完成身份、绑定上下文与去重记录的原子接受。submission_id 在单用户 Runtime 存储范围内唯一；记录首版不自动清理。相同 id、相同指纹返回原任务；相同 id、不同指纹以内部 ValueError 拒绝，不新增跨方错误码。Accepted 后才能排队执行。
 
-当前使用 queued、running、cancelled、finished；waiting_approval 在阶段 D 实施。它们为运行管理层内部状态，不替代 TaskCheckpoint.phase 或 Run outcome。具体审批状态在阶段 D 契约中评审。当前实现仅提供接受、排队、运行与结果关联记录，不授权自动恢复、外部动作重放或网络协议。
+当前使用 queued、running、cancelled、finished；waiting_approval 仍是可恢复审批设计目标，尚未接入当前接受状态。它们为运行管理层内部状态，不替代 TaskCheckpoint.phase 或 Run outcome。已有审批记录及控制资格以[运行控制参考](runtime-control.md)为准，不能据此推导接受状态已支持挂起/续跑。当前实现仅提供接受、排队、运行与结果关联记录，不授权自动恢复、外部动作重放或网络协议。
 
 ## 故障与回退
 
@@ -20,10 +20,14 @@ B/C 原始任务记录使用 schema_version=1，包含 task_id、submission_id�
 
 取得执行权后的请求还原、上下文取得和工具准备也属于该尝试；任一步失败都必须写入终态，不得遗留虚假的 running。同一 Task 的多个已接受提交可串行共用 Task 执行上下文；运行时只在没有排队、执行或待交付提交仍引用它时释放。
 
-壳的终态观察通知不是权威状态：Runtime 必须先将结果提交到任务库，再发布完成或中断通知。结果提交失败时保留 running 作为“执行事实待核对”信号，不发布终态、不自动重放；观察回调失败不回滚已持久化结果。
+界面的终态观察通知不是权威状态：Runtime 必须先将结果提交到任务库，再发布完成或中断通知。结果提交失败时保留 running 作为“执行事实待核对”信号，不发布终态、不自动重放；观察回调失败不回滚已持久化结果。
 
 会话型执行的终态通知还必须等待本轮会话消息与恢复元数据保存成功。会话保存失败时不发布终态，并回滚本轮对内存会话和 conversation 的修改；任务库中已提交的执行结果仍用于核对，不得因会话保存失败重放工具副作用。
 
 ## 验收
 
 并发重复提交只产生一条任务；提交内容冲突被拒绝；持久化失败无执行副作用；同 Task 排队提交均取得准确终态；准备失败不遗留 running；结果提交失败不发布终态且不重放；确认丢失和重启仍能查询原任务；旧会话可读取；重复提交不重置预算或重新执行已有终态任务。
+
+实现依据：[tasks.py](../../src/saiworks/sessions/tasks.py)、[runtime.py](../../src/saiworks/runtime.py)。
+
+回归入口：[test_headless_runtime.py](../../tests/test_headless_runtime.py)。

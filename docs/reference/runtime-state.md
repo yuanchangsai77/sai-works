@@ -1,6 +1,6 @@
 # 当前运行状态参考
 
-状态：源码类型与现有行为参考，核对于 2026-10-23。这里记录已存在的内部字段，不定义新的对外 API 或持久化版本。
+状态：源码类型与现有行为参考，字段基线核对于 2026-10-23；2026-11-06 按源码复核取消桥接。这里记录已存在的内部字段，不定义新的对外 API 或持久化版本。
 
 ## 请求、结果与终态
 
@@ -13,7 +13,7 @@
 
 TaskStatus 与 Run outcome 是不同层级。任务状态为 pending、in_progress、blocked、verified、done；引擎运行终态包括 completed、blocked、stalled、runtime_error、interrupted、exhausted。不能把所有非异常返回解释为完成。
 
-同进程运行中断信号若在工具执行期间到达，工具返回的结果仍先记录到观察和检查点，Run 随后以 `interrupted` 收尾。此前该时序可能以 `completed` 收尾；本次使用已有 outcome 值修正了这一可见语义，CLI/TUI/Desktop 或其他结果消费者应按 `interrupted` 展示，不把工具成功等同于 Run 完成。按 Task 持久化的取消接受点仍未自动触发此内存中断路径。
+同进程运行中断信号若在工具执行期间到达，工具返回的结果仍先记录到观察和检查点，Run 随后以 `interrupted` 收尾。CLI/TUI/桌面应用或其他消费者应按 `interrupted` 展示，不把工具成功等同于 Run 完成。按 Task 持久化接受取消后，Runtime 已通知对应上下文并桥接活动 Run；取消接受与新动作启动在 TaskStore 中排序。该机制不承诺外部副作用立即停止，详见[任务控制与审批](runtime-control.md)。
 
 独立 Runtime 接受记录的 queued/running/cancelled/finished 不替代上述状态；接受事务与提交重试见[持久化接受参考](runtime-acceptance.md)。
 
@@ -50,6 +50,10 @@ SessionResumeState 关联最近运行、提示、结果、未解决问题、bloc
 
 ## 维护与来源
 
-源码依据：src/saiworks/types.py、orchestration/control.py、sessions/store.py、interaction/commands/session_cmds.py。领域语义见[Agent Runtime](../runtime/agent-runtime.md)、[Evidence & Recovery](../runtime/evidence-recovery.md)、[Workspace](../runtime/workspace.md)。
+领域语义见[智能体运行时](../runtime/agent-runtime.md)、[证据与恢复](../runtime/evidence-recovery.md)、[工作区与资源范围](../runtime/workspace.md)。
 
 新增对外字段、错误码或语义另行进行契约协商；此页不把内部类型直接发布为网络 schema。
+
+实现依据：[types.py](../../src/saiworks/types.py)、[control.py](../../src/saiworks/orchestration/control.py)。
+
+回归入口：[test_execution_engine_sessions_and_cli_runtime.py](../../tests/test_execution_engine_sessions_and_cli_runtime.py)。

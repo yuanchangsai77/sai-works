@@ -112,3 +112,7 @@
 - 路由、鉴权、限流、缓存、批处理、量化选择和硬件调度属于可组合能力，不写入基础正文协议。
 - 后端能力通过独立元数据或能力发现接口声明，不根据服务名称猜测。
 - 新能力优先扩展现有请求生命周期和适配器接口，避免为特定客户端建立旁路。
+
+实现依据：[client.py](../../src/saiworks/model/client.py)、[parser.py](../../src/saiworks/model/parser.py)。
+
+回归入口：[test_model_client_prompt_and_parser_protocol.py](../../tests/test_model_client_prompt_and_parser_protocol.py)。
