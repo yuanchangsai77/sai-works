@@ -58,7 +58,7 @@ class OwnedProcess:
                 continue
             try:
                 data = (entry / 'stat').read_text()
-            except FileNotFoundError:
+            except (FileNotFoundError, ProcessLookupError):
                 continue
             fields = data[data.rfind(')') + 2:].split()
             if len(fields) < 4:

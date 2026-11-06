@@ -2,6 +2,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event, RLock
 import subprocess
+from types import SimpleNamespace
 
 import pytest
 
@@ -9,6 +10,26 @@ from saiworks.observability.logger import InMemoryLogger
 from saiworks.tools.builtins.shell_exec import ShellSession, _shell_session, tool
 from saiworks.tools.registry import ToolRegistry
 from saiworks.types import ToolAction
+
+
+@pytest.mark.parametrize("error_type", [FileNotFoundError, ProcessLookupError, PermissionError])
+def test_process_group_scan_handles_only_disappeared_processes(monkeypatch, error_type):
+    from saiworks.tools.process_lifecycle import OwnedProcess
+
+    entry = Path("/proc/12345")
+    monkeypatch.setattr(Path, "iterdir", lambda self: iter([entry]))
+
+    def read_stat(self, *args, **kwargs):
+        assert self == entry / "stat"
+        raise error_type("process disappeared or access denied")
+
+    monkeypatch.setattr(Path, "read_text", read_stat)
+    owner = OwnedProcess(SimpleNamespace(pid=12345), owns_group=True)
+    if error_type is PermissionError:
+        with pytest.raises(PermissionError):
+            owner._group_active()
+    else:
+        assert owner._group_active() is False
 
 
 def registry(tmp_path):
