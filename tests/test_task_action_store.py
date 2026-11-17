@@ -12,8 +12,7 @@ def test_effectful_failure_never_defaults_to_known_without_execution_proof(tmp_p
     action = store.start_action(task.task_id, 'one', 'external', {}, str(tmp_path), 'write')
     store.finish_action(action, success=False, error_code=error_code)
     assert store.unknown_actions(task.task_id)[0]['state'] == 'uncertain'
-    with pytest.raises(RuntimeError, match='unknown outcome'):
-        store.start_action(task.task_id, 'one', 'another', {}, str(tmp_path), 'write')
+    assert store.start_action(task.task_id, 'one', 'another', {}, str(tmp_path), 'write')
 
 
 def test_reconciliation_requires_basis_and_persists_redacted_decision_atomically(tmp_path):

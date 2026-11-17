@@ -50,6 +50,10 @@ class EffectTracker:
     def begin(self) -> None:
         self._started = True
 
+    def confirm_not_dispatched(self) -> None:
+        """Accept only an executor-owned receipt that the user action was skipped."""
+        self._started = False
+
 
 @dataclass(slots=True)
 class ToolContext:

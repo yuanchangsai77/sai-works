@@ -130,7 +130,7 @@ class TaskStore:
     """Atomic acceptance and attempt ownership, independent of legacy session JSON.
 
     Unfinished claims are never reclaimed automatically after a process restart.
-    Their external effects must first be reconciled by an explicit recovery path.
+    Their execution facts are retained for model-directed recovery.
     """
 
     def __init__(self, path: str | Path):
@@ -469,15 +469,6 @@ class TaskStore:
                 raise KeyboardInterrupt
             if risk_level == "read":
                 return None
-            unresolved = connection.execute(
-                """SELECT 1 FROM action_attempts WHERE task_id=?
-                AND state IN ('started', 'uncertain') LIMIT 1""",
-                (task_id,),
-            ).fetchone()
-            if unresolved is not None:
-                raise RuntimeError(
-                    "A previous task action has an unknown outcome; reconcile its external effect before another effectful action"
-                )
             identity_arguments = dict(arguments)
             if action_name in {"shell_exec", "run_tests"}:
                 identity_arguments.pop("timeout", None)
@@ -485,13 +476,6 @@ class TaskStore:
                 "task_id": task_id, "name": action_name, "arguments": identity_arguments,
                 "workspace": workspace,
             }).encode()).hexdigest()
-            prior = connection.execute(
-                """SELECT state FROM action_attempts WHERE task_id=? AND action_fingerprint=?
-                AND state='performed' LIMIT 1""",
-                (task_id, fingerprint),
-            ).fetchone()
-            if prior is not None:
-                raise RuntimeError("A previous attempt of this action was confirmed performed; it must not be replayed")
             action_id = uuid4().hex
             descriptor = describe_creation(action_name, arguments, workspace)
             connection.execute("""INSERT INTO action_attempts
@@ -537,6 +521,16 @@ class TaskStore:
                 ORDER BY started_at, action_id""", (task_id,)).fetchall()
             return tuple({**dict(row), "arguments_summary": json.loads(row["arguments_summary"])} for row in rows)
 
+    def recovery_actions(self, task_id: str) -> tuple[dict[str, Any], ...]:
+        """Current diagnostics; successful later calls supersede older tool errors."""
+        with closing(self._connect()) as connection:
+            latest_success = dict(connection.execute(
+                "SELECT action_name, MAX(started_at) FROM action_attempts "
+                "WHERE task_id=? AND success=1 AND state='finished' GROUP BY action_name", (task_id,),
+            ).fetchall())
+        return tuple(item for item in self.unknown_actions(task_id)
+                     if item["started_at"] > latest_success.get(item["action_name"], ""))
+
     def observe_pending_file_actions(self, task_id: str) -> tuple[dict, ...]:
         """Record bounded current-state observations without inferring execution history."""
         with closing(self._connect()) as connection, connection:
@@ -546,9 +540,14 @@ class TaskStore:
             rows = connection.execute("""SELECT * FROM action_attempts
                 WHERE task_id=? AND state IN ('started', 'uncertain')
                 AND recovery_descriptor IS NOT NULL AND recovery_descriptor!='null'
-                ORDER BY started_at, action_id LIMIT 8""", (task_id,)).fetchall()
+                ORDER BY started_at DESC, action_id DESC""", (task_id,)).fetchall()
             observations = []
-            for row in rows[:8]:
+            current_ids = {item["action_id"] for item in self.recovery_actions(task_id)}
+            for row in rows:
+                if len(observations) == 8:
+                    break
+                if row["action_id"] not in current_ids:
+                    continue
                 descriptor = json.loads(row["recovery_descriptor"])
                 if not isinstance(descriptor, dict) or descriptor.get("kind") != "file_creation_v1":
                     continue

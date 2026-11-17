@@ -35,11 +35,10 @@ def test_observation_never_infers_execution_history(tmp_path, content, observed)
     assert evidence['execution_outcome'] == 'unknown'
     reopened.accept(UserRequest('continue', str(tmp_path)), submission_id='two', task_id='task')
     assert reopened.claim('two')
-    with pytest.raises(RuntimeError, match='unknown outcome'):
-        reopened.start_action('task', 'two', 'patch', {'diff': DIFF}, str(tmp_path), 'write')
+    assert reopened.start_action('task', 'two', 'patch', {'diff': DIFF}, str(tmp_path), 'write')
 
 
-def test_links_never_release_unknown_effect_gate(tmp_path):
+def test_links_preserve_unknown_effect_facts(tmp_path):
     store, _ = pending(tmp_path)
     store.finish('one', ExecutionSummary('lost', [], outcome='runtime_error'))
     outside = tmp_path / 'outside'

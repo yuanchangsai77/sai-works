@@ -35,7 +35,7 @@ Session、Task 和 Run 的生命周期不能互相替代。一次 Run 结束不�
 
 协调器保留装配和轮次推进；当前可见操作说明由同一内部选择器按轮装载。Run 临时计数与 Task 共享绑定分离；SessionContext 是模型工作集，不是第二套策略或任务数据库。源码见 [engine](../../src/saiworks/orchestration/engine.py)、[actions](../../src/saiworks/orchestration/actions.py)、[results](../../src/saiworks/orchestration/results.py) 和 [finalize](../../src/saiworks/orchestration/finalize.py)。
 
-Task 取消接受与动作启动在 TaskStore 中按事务排序；已经启动的工具登记结果后再报告中断。清理只能作用于所属上下文，失败保留待重试事实，不覆盖已确定结果；单独的文件现状或进程退出不能解除未知副作用门禁。可信阶段、未知动作及数据升级分别以[工具执行](../reference/tool-execution.md)和[运行控制](../reference/runtime-control.md)为准，不重复定义。
+Task 取消接受与动作启动在 TaskStore 中按事务排序；已经启动的工具登记结果后再报告中断。清理只能作用于所属上下文，失败保留待重试事实，不覆盖已确定结果；单独的文件现状或进程退出不能证明历史副作用结果，未确认记录作为模型恢复事实提供，不阻塞其后续决策。可信阶段、未知动作及数据升级分别以[工具执行](../reference/tool-execution.md)和[运行控制](../reference/runtime-control.md)为准，不重复定义。
 
 ## 预算与干预
 

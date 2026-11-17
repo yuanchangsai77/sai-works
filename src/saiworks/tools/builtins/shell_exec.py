@@ -4,6 +4,7 @@ import selectors
 from contextlib import nullcontext
 from threading import RLock
 import os
+import re
 import shlex
 import subprocess
 import time
@@ -77,6 +78,12 @@ class ShellSession:
         self.cwd = cwd
         self._lifecycle_lock = RLock()
         self._closed = False
+        # A reused Bash can contain DEBUG traps or overridden builtins. Its
+        # diagnostic output cannot prove that lookup itself had no side effects.
+        self._lookup_proof_safe = not any(
+            key in {"BASH_ENV", "ENV", "SHELLOPTS", "BASHOPTS"} or key.startswith("BASH_FUNC_")
+            for key in os.environ
+        )
         self.process = self._start(cwd)
 
     @property
@@ -106,8 +113,25 @@ class ShellSession:
                 setup = f"cd {quoted_cwd} || exit $?\n"
 
             marker = f"__SAIWORKS_DONE_{time.monotonic_ns()}__"
+            skipped_marker = marker.replace("_DONE_", "_NOT_DISPATCHED_")
+            # Only literal simple commands are eligible. Never infer absence from
+            # status 127 after executing arbitrary shell syntax.
+            literal = re.fullmatch(r"[A-Za-z0-9_./-]+(?:[ \t]+[A-Za-z0-9_./-]+)*", command)
+            dispatch = command
+            proof_eligible = bool(literal) and self._lookup_proof_safe
+            self._lookup_proof_safe = False
+            if proof_eligible:
+                executable = shlex.quote(command.split()[0])
+                dispatch = (
+                    f"if builtin type -t -- {executable} >/dev/null 2>&1 "
+                    "|| builtin type -t -- command_not_found_handle >/dev/null 2>&1; then\n"
+                    f"{command}\nelse\n"
+                    f"printf '%s\\n' {shlex.quote(skipped_marker)}\n"
+                    f"printf '%s\\n' {shlex.quote(command.split()[0] + ': command not found')}\n"
+                    "(exit 127)\nfi"
+                )
             wrapped = (
-                f"{setup}{command}\n"
+                f"{setup}{dispatch}\n"
                 "__saiworks_status=$?\n"
                 f"printf '\\n{marker}:%s:%s\\n' \"$__saiworks_status\" \"$PWD\"\n"
             )
@@ -150,6 +174,14 @@ class ShellSession:
             cwd_check.name = "command"
             cwd_check.output = f"persistent shell cwd escaped the authorized workspace: {reported_cwd}"
             return cwd_check
+
+        if proof_eligible and stdout.splitlines()[:1] == [skipped_marker] and exit_code == 127:
+            # This marker is emitted only by our no-dispatch branch. Tool output
+            # metadata and ordinary nonzero exits cannot supply this proof.
+            if self.context.effect_tracker is not None:
+                self.context.effect_tracker.confirm_not_dispatched()
+            self._lookup_proof_safe = True
+            stdout = "\n".join(stdout.splitlines()[1:]) + "\n"
 
         self.cwd = cwd_check.path
         stdout = clip(stdout, self.context.max_output_bytes)

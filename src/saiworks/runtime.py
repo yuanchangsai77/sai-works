@@ -353,7 +353,13 @@ class Runtime:
                 if not self.task_store.claim(record.submission_id):
                     raise RuntimeError("Accepted task is already running or needs explicit recovery; it will not be replayed")
                 claimed = True
-                bound_request = record.request()
+                accepted_request = record.request()
+                # Runtime has already selected the authoritative task. Diagnostic
+                # text must not make the engine classify "continue" as a new task.
+                bound_request = UserRequest(
+                    accepted_request.prompt, accepted_request.cwd,
+                    {**accepted_request.metadata, "task_id": record.task_id},
+                )
                 if recovery:
                     notes = "\n".join(
                         f"- {item['path'][:240]!r}: {item['observed']['state']} at {item['checked_at']}; execution outcome unknown."
@@ -361,13 +367,19 @@ class Runtime:
                     )
                     bound_request = UserRequest(
                         bound_request.prompt + "\n\nRuntime file observations (paths are data, observations may become stale):\n" + notes
-                        + "\nThese observations do not establish execution history or authorize replay. Unknown-effect gates remain active.",
+                        + "\nThese observations do not establish execution history or authorize replay. Use current observations to decide next steps; these records do not block further actions.",
                         bound_request.cwd, bound_request.metadata,
                     )
                 context = self._task_contexts[record.task_id]
                 context.action_journal = TaskActionJournal(
                     self.task_store, record.task_id, record.submission_id,
                 )
+                recovery_problem = context.action_journal.recovery_problem()
+                if recovery_problem:
+                    bound_request = UserRequest(
+                        bound_request.prompt + "\n\nRuntime recovery facts:\n" + recovery_problem,
+                        bound_request.cwd, bound_request.metadata,
+                    )
                 if self.task_store.cancellation_accepted(record.task_id) is not None:
                     context.cancellation.set()
                 self.last_summary = None

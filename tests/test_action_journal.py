@@ -27,7 +27,7 @@ def test_cancelled_task_cannot_admit_new_action(tmp_path):
     assert store.unknown_actions(record.task_id) == ()
 
 
-def test_unknown_effect_is_not_replayed_by_following_submission(tmp_path):
+def test_unknown_effect_is_preserved_without_blocking_model_selected_action(tmp_path):
     store = TaskStore(tmp_path / "tasks.sqlite3")
     first = store.accept(UserRequest("write", str(tmp_path)), submission_id="one", task_id="task")
     assert store.claim("one")
@@ -37,8 +37,8 @@ def test_unknown_effect_is_not_replayed_by_following_submission(tmp_path):
     reopened = TaskStore(store.path)
     second = reopened.accept(UserRequest("continue", str(tmp_path)), submission_id="two", task_id="task")
     assert reopened.claim(second.submission_id)
-    with pytest.raises(RuntimeError, match="unknown outcome"):
-        reopened.start_action("task", "two", "patch", {"path": "a.py"}, str(tmp_path), "write")
+    admitted = reopened.start_action("task", "two", "patch", {"path": "a.py"}, str(tmp_path), "write")
+    reopened.finish_action(admitted, success=True, error_code=None)
     assert reopened.unknown_actions("task")[0]["action_id"] == action_id
     assert reopened.start_action("task", "two", "read_file", {"path": "a.py"}, str(tmp_path), "read") is None
     assert len(reopened.unknown_actions("task")) == 1
@@ -51,7 +51,7 @@ def test_unknown_effect_is_not_replayed_by_following_submission(tmp_path):
     assert reopened.unknown_actions("task") == ()
 
 
-def test_confirmed_effect_cannot_be_replayed(tmp_path):
+def test_confirmed_effect_does_not_block_model_selected_action(tmp_path):
     store = TaskStore(tmp_path / "tasks.sqlite3")
     record = store.accept(UserRequest("write", str(tmp_path)), submission_id="one")
     assert store.claim("one")
@@ -60,12 +60,12 @@ def test_confirmed_effect_cannot_be_replayed(tmp_path):
     store.resolve_action(action_id, effect_state="performed", actor="test-owner", evidence={"check": "external state verified"})
     second = store.accept(UserRequest("retry", str(tmp_path)), submission_id="two", task_id=record.task_id)
     assert store.claim(second.submission_id)
-    with pytest.raises(RuntimeError, match="confirmed performed"):
-        store.start_action(record.task_id, "two", "patch", {"path": "a.py"}, str(tmp_path), "write")
+    admitted = store.start_action(record.task_id, "two", "patch", {"path": "a.py"}, str(tmp_path), "write")
+    store.finish_action(admitted, success=True, error_code=None)
     assert store.unknown_actions(record.task_id) == ()
 
 
-def test_uncertain_tool_result_blocks_changed_timeout_and_other_effects(tmp_path):
+def test_uncertain_tool_result_does_not_block_other_effects(tmp_path):
     store = TaskStore(tmp_path / "tasks.sqlite3")
     record = store.accept(UserRequest("send", str(tmp_path)), submission_id="one")
     assert store.claim("one")
@@ -77,10 +77,10 @@ def test_uncertain_tool_result_blocks_changed_timeout_and_other_effects(tmp_path
     assert len(unknown) == 1
     assert unknown[0]["state"] == "uncertain"
     assert unknown[0]["error_code"] == "timeout"
-    with pytest.raises(RuntimeError, match="unknown outcome"):
-        store.start_action(record.task_id, "one", "shell_exec", {"command": "send", "timeout": 2}, str(tmp_path), "execute")
-    with pytest.raises(RuntimeError, match="unknown outcome"):
-        store.start_action(record.task_id, "one", "patch", {"path": "other.py"}, str(tmp_path), "write")
+    admitted = store.start_action(record.task_id, "one", "shell_exec", {"command": "send", "timeout": 2}, str(tmp_path), "execute")
+    store.finish_action(admitted, success=True, error_code=None)
+    admitted = store.start_action(record.task_id, "one", "patch", {"path": "other.py"}, str(tmp_path), "write")
+    store.finish_action(admitted, success=True, error_code=None)
     assert store.start_action(record.task_id, "one", "read_file", {"path": "status.txt"}, str(tmp_path), "read") is None
 
 
@@ -94,23 +94,23 @@ def test_store_keeps_ambiguous_results_uncertain_for_every_caller(tmp_path, erro
     assert store.unknown_actions(record.task_id)[0]["state"] == "uncertain"
 
 
-def test_nonzero_shell_and_test_exit_both_require_reconciliation(tmp_path):
+def test_nonzero_shell_and_test_exit_preserve_facts_without_blocking(tmp_path):
     store = TaskStore(tmp_path / "tasks.sqlite3")
     shell = store.accept(UserRequest("effect", str(tmp_path)), submission_id="shell")
     assert store.claim("shell")
     action_id = store.start_action(shell.task_id, "shell", "shell_exec", {"command": "write && fail"}, str(tmp_path), "execute")
     store.finish_action(action_id, success=False, error_code="nonzero_exit")
     assert store.unknown_actions(shell.task_id)[0]["state"] == "uncertain"
-    with pytest.raises(RuntimeError, match="unknown outcome"):
-        store.start_action(shell.task_id, "shell", "patch", {"path": "other.py"}, str(tmp_path), "write")
+    admitted = store.start_action(shell.task_id, "shell", "patch", {"path": "other.py"}, str(tmp_path), "write")
+    store.finish_action(admitted, success=True, error_code=None)
 
     test = store.accept(UserRequest("test", str(tmp_path)), submission_id="test")
     assert store.claim("test")
     test_id = store.start_action(test.task_id, "test", "run_tests", {"command": "pytest"}, str(tmp_path), "test")
     store.finish_action(test_id, success=False, error_code="nonzero_exit")
     assert store.unknown_actions(test.task_id)[0]["state"] == "uncertain"
-    with pytest.raises(RuntimeError, match="unknown outcome"):
-        store.start_action(test.task_id, "test", "run_tests", {"command": "pytest", "timeout": 2}, str(tmp_path), "test")
+    admitted = store.start_action(test.task_id, "test", "run_tests", {"command": "pytest", "timeout": 2}, str(tmp_path), "test")
+    store.finish_action(admitted, success=True, error_code=None)
 
 
 def test_started_action_keeps_redacted_reconciliation_facts_across_v4_upgrade(tmp_path):
@@ -220,8 +220,8 @@ def test_reconciliation_requires_no_running_submission_and_stable_command_identi
     store.resolve_action(action_id, effect_state="performed", actor="test-owner", evidence={"check": "external state verified"})
     second = store.accept(UserRequest("retry", str(tmp_path)), submission_id="two", task_id=record.task_id)
     assert store.claim(second.submission_id)
-    with pytest.raises(RuntimeError, match="confirmed performed"):
-        store.start_action(record.task_id, "two", action_name, {"command": "send", "timeout": 2}, str(tmp_path), "execute")
+    admitted = store.start_action(record.task_id, "two", action_name, {"command": "send", "timeout": 2}, str(tmp_path), "execute")
+    store.finish_action(admitted, success=True, error_code=None)
 
 
 def test_runtime_cancel_records_in_flight_result_without_starting_next_action(tmp_path):
@@ -270,7 +270,7 @@ def test_runtime_cancel_records_in_flight_result_without_starting_next_action(tm
     assert metrics["tool_seconds"] >= 0
 
 
-def test_effect_then_executor_failure_is_not_replayed_on_task_resume(tmp_path):
+def test_model_selected_retry_is_allowed_after_executor_failure(tmp_path):
     effects = []
 
     def uncertain_write(_action, _context):
@@ -295,14 +295,13 @@ def test_effect_then_executor_failure_is_not_replayed_on_task_resume(tmp_path):
     assert admitted["action_id"] == store.unknown_actions("task")[0]["action_id"]
     assert "arguments_ref" in admitted
 
-    resumed = runtime.execute(
-        UserRequest("retry", str(tmp_path), {"task_id": "task"}), submission_id="second",
-    )
-    assert resumed.outcome == "runtime_error"
-    assert effects == ["external write"]
+    with pytest.raises(OSError, match="connection lost"):
+        runtime.execute(UserRequest("retry", str(tmp_path), {"task_id": "task"}), submission_id="second")
+    assert effects == ["external write", "external write"]
+    assert len(store.unknown_actions("task")) == 2
 
 
-def test_runtime_does_not_retry_timed_out_effect_with_changed_arguments(tmp_path):
+def test_runtime_allows_model_selected_retry_after_timeout(tmp_path):
     calls = []
 
     def timed_out(action, _context):
@@ -314,6 +313,8 @@ def test_runtime_does_not_retry_timed_out_effect_with_changed_arguments(tmp_path
 
         def respond(self, _session):
             self.turns += 1
+            if self.turns > 2:
+                return ModelReply("Unresolved timeout; stopping retries", done=True)
             return ModelReply(
                 "retrying", actions=[ToolAction("effect", {"timeout": self.turns})], done=False,
             )
@@ -332,8 +333,8 @@ def test_runtime_does_not_retry_timed_out_effect_with_changed_arguments(tmp_path
 
     summary = runtime.execute(UserRequest("effect", str(tmp_path)), submission_id="run")
 
-    assert summary.outcome == "runtime_error"
-    assert calls == [1]
+    assert summary.outcome != "runtime_error"
+    assert calls == [1, 2]
     task_id = store.get_submission("run").task_id
     assert store.unknown_actions(task_id)[0]["state"] == "uncertain"
 
@@ -409,3 +410,78 @@ def test_cleanup_continues_after_failure_and_retries_only_unfinished_resources()
     assert registry.state_for("persistent") is persistent
     registry.reset_state()
     assert calls[-1] == "persistent"
+
+@pytest.mark.parametrize('summarize', [False, True])
+def test_pending_effect_informs_model_without_blocking_approval_or_completion(tmp_path, summarize):
+    approvals, calls, prompts = [], [], []
+
+    class Model:
+        def respond(self, session):
+            prompts.append(session.request.prompt)
+            return ModelReply('All done', done=True, actions=[] if summarize else [ToolAction('effect', {})])
+
+    logger = InMemoryLogger(base_dir=str(tmp_path / 'runs'))
+    tools = ToolRegistry(logger)
+    tools.register(SimpleTool('effect', 'effect', {},
+                              lambda *_: calls.append('effect') or ToolResult('effect', True, 'ok'),
+                              risk_level='execute'))
+    engine = ExecutionEngine(Model(), tools, Guardrails(DefaultPolicy(mode='confirm'), logger), logger,
+                             approval_callback=lambda *_: approvals.append('approved') or True)
+    store = TaskStore(tmp_path / 'tasks.sqlite3')
+    first = store.accept(UserRequest('probe', str(tmp_path)), submission_id='first', task_id='task')
+    assert store.claim('first')
+    action_id = store.start_action('task', 'first', 'shell_exec', {'command': 'missing'}, str(tmp_path), 'execute')
+    store.finish_action(action_id, success=False, error_code='nonzero_exit')
+    store.finish('first', ExecutionSummary('unknown', [], outcome='runtime_error'))
+    runtime = Runtime(engine, logger=logger, task_store=store)
+    from saiworks.types import SessionResumeState, TaskCheckpoint
+    request = UserRequest('continue', str(tmp_path), metadata={
+        'resume_state': SessionResumeState(last_outcome='runtime_error', checkpoint=TaskCheckpoint(
+            objective='original probe', task_id='task', workspace_root=str(tmp_path)))})
+    summary = runtime.execute(request, submission_id='second')
+    assert summary.outcome != 'runtime_error'
+    assert summary.checkpoint.task_id == 'task'
+    assert summary.checkpoint.objective == 'original probe'
+    assert 'task_id' not in request.metadata
+    assert approvals == ([] if summarize else ['approved'])
+    assert calls == ([] if summarize else ['effect'])
+    assert action_id in prompts[0]
+    assert 'error receipt recorded' in prompts[0]
+    assert 'elapsed_seconds=' in prompts[0]
+    assert store.unknown_actions('task')[0]['action_id'] == action_id
+
+
+def test_success_removes_prior_tool_errors_from_recovery_context(tmp_path):
+    store = TaskStore(tmp_path / 'tasks.sqlite3')
+    store.accept(UserRequest('probe', str(tmp_path)), submission_id='run', task_id='task')
+    store.claim('run')
+    journal = TaskActionJournal(store, 'task', 'run')
+    def attempt(tool, success):
+        action_id = store.start_action('task', 'run', tool, {}, str(tmp_path), 'execute')
+        store.finish_action(action_id, success=success, error_code=None if success else 'timeout')
+        return action_id
+    old = [attempt('probe', False) for _ in range(3)]
+    other = attempt('other', False)
+    assert len(store.recovery_actions('task')) == 4
+    attempt('probe', True)
+    assert [item['action_id'] for item in store.recovery_actions('task')] == [other]
+    newest = attempt('probe', False)
+    facts = journal.recovery_problem()
+    assert newest in facts and other in facts
+    assert all(action_id not in facts for action_id in old)
+    assert len(store.unknown_actions('task')) == 5
+
+
+def test_recovery_summary_keeps_latest_errors_and_discloses_omissions(tmp_path):
+    store = TaskStore(tmp_path / 'tasks.sqlite3')
+    store.accept(UserRequest('probe', str(tmp_path)), submission_id='run', task_id='task')
+    store.claim('run')
+    ids = []
+    for index in range(9):
+        action_id = store.start_action('task', 'run', f'probe_{index}', {}, str(tmp_path), 'execute')
+        store.finish_action(action_id, success=False, error_code='timeout')
+        ids.append(action_id)
+    facts = TaskActionJournal(store, 'task', 'run').recovery_problem()
+    assert ids[0] not in facts
+    assert all(action_id in facts for action_id in ids[1:])
+    assert '1 older current records omitted' in facts
