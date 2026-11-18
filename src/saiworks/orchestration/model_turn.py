@@ -66,12 +66,22 @@ class ModelTurn:
                             "Sending request", 0.0,
                         )
                 try:
+                    recovery = getattr(engine._execution_context.action_journal, "recovery_problem", None)
+                    self.session.recovery_facts = (recovery() or "") if callable(recovery) else ""
+                    for loader in engine.context_loaders:
+                        refresh = getattr(loader, "refresh_observed_paths", None)
+                        if callable(refresh):
+                            refresh(self.session.request, self.session)
                     budget_problem = self.budget_problem()
                     if budget_problem is not None:
                         break
                     if not getattr(engine.model, "tracks_model_requests", False):
                         self.before_request()
                     reply = engine.model.respond(self.session)
+                    acknowledge = getattr(engine.tools, 'acknowledge_runtime_state', None)
+                    if callable(acknowledge):
+                        acknowledge()
+                    self.session.checkpoint.runtime_state.pop('shell_recovery', None)
                     state.consecutive_model_timeouts = 0
                     engine._raise_if_cancelled()
                     elapsed_problem = self.budget_problem()

@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
+from uuid import uuid4
 
 from ..types import ExecutionSummary, StoredSession
 
@@ -101,6 +102,7 @@ class DesktopController:
         self.runtime = runtime
         self._session: StoredSession | None = None
         self._conversation: list[dict[str, str]] = []
+        self._active_submission_id = None
 
     def open_workspace(self, cwd: str | Path, *, session_id: str | None = None) -> DesktopSessionView:
         if self.runtime.is_closed:
@@ -193,19 +195,22 @@ class DesktopController:
         generation = session.context_generation
         if not self.runtime.prepare_turn(session, request, generation, self._conversation):
             return None
-        summary = self.runtime.execute_session_turn(
-            request,
-            prompt,
-            session,
-            self._conversation,
-            generation,
-        )
+        self._active_submission_id = request.metadata.setdefault('runtime_submission_id', uuid4().hex)
+        try:
+            summary = self.runtime.execute_session_turn(
+                request, prompt, session, self._conversation, generation,
+            )
+        finally:
+            self._active_submission_id = None
         if summary is None:
             self.runtime.discard_prepared_turn(request)
         return summary
 
     def cancel_current(self) -> None:
-        self.runtime.cancel_current_run()
+        if self._active_submission_id and self.runtime.get_submission(self._active_submission_id) is not None:
+            self.runtime.cancel_submission(self._active_submission_id)
+        else:
+            self.runtime.cancel_current_run()
 
     def close(self, *, force: bool = False) -> None:
         self._close_current_session()

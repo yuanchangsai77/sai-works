@@ -12,6 +12,8 @@
 
 `interaction.desktop_presenter` 是无 GUI 的展示适配层，将 Runtime 进度转换为语义化动作名称、紧凑进度卡和 Execution Rail 所需状态。它不能决定任务是否完成、审批是否有效或操作是否成功；这些事实仍以 Runtime 返回值和 trace 为准。
 
+运行中的进度卡显示自最近状态更新经过的时长，只由窗口计时刷新，不追加运行日志或触发模型请求。经过时长不是工具心跳，也不能证明外部操作仍在执行；失败、超时和取消仍消费真实结果。
+
 `interaction.desktop_windows` 收纳 Quick Actions、Diagnostics 和打开日志目录等辅助窗口能力。它只消费控制器给出的只读投影和界面层回调，不直接访问 Runtime、Engine 或会话存储。
 
 当前参考窗口已按产品设计具备基础工作台的主要界面能力：两栏主界面、基于现有 session 的任务导航、紧凑运行卡、按需展开的 Activity/Execution Rail、结果与错误卡、`⌘K` Quick Actions、当前任务诊断和日志目录入口。任务导航和诊断由 `DesktopController` 聚合 Runtime 的 session/trace 投影；它不等同于统一任务观察接口的独立 `TaskSnapshot` 和修订订阅或完整 Artifact 查询。
@@ -27,8 +29,8 @@ Conversation、Result、Artifacts 视图已投影当前和历史结果；产物�
 ## 当前限制
 
 - controller 与 Runtime 同进程，关闭进程不保证任务续跑。
-- 窗口取消仍调用当前运行入口；内核已有按 Task 控制资格和取消桥接，窗口尚未迁移到该稳定控制接口。
-- 审批仍沿用同步兼容适配；内核已有审批记录与 TTL，但窗口尚未接入其等待生命周期，可恢复挂起与 continuation 未实施。
+- 窗口取消通过当前提交定位所属 Task，转交 Runtime 的任务控制资格，避免取消其他会话正在运行的任务。
+- 审批和用户问题沿用执行槽外的同步兼容适配，背后由 Runtime 持久化等待、核验决定并续跑。问题支持建议选项和自由输入，关闭问题取消当前任务。窗口尚未统一消费 TaskSnapshot 的修订订阅，不承诺运行中跨界面接管或关闭进程后自动续跑。
 - Tk 参考窗口尚未完成生产打包、签名、自动更新与完整无障碍验收，不构成长期 GUI 技术承诺。
 
 实现依据：[desktop.py](../../src/saiworks/interaction/desktop.py)、[desktop_app.py](../../src/saiworks/interaction/desktop_app.py)。

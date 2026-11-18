@@ -180,6 +180,44 @@ def test_desktop_activity_model_preserves_execution_semantics():
     assert activity.headline == "✓  Completed"
 
 
+def test_desktop_wait_counter_does_not_create_execution_events(monkeypatch):
+    now = [10.0]
+    monkeypatch.setattr('saiworks.interaction.desktop_presenter.time.monotonic', lambda: now[0])
+    activity = DesktopActivityModel()
+    activity.start('Run a local command')
+    now[0] += 65
+    assert activity.waiting_headline().endswith('65s since last status update')
+    assert len(activity.steps) == 1
+    assert activity.steps[0].state == 'current'
+    activity.update('Command timed out')
+    assert activity.waiting_headline().endswith('0s since last status update')
+    activity.finish('stalled')
+    now[0] += 100
+    assert activity.waiting_headline() == activity.headline
+
+
+def test_desktop_user_question_is_cancellable_and_accepts_free_text():
+    app = DesktopApp.__new__(DesktopApp)
+    app._events = Queue()
+    app._approval_lock = Lock()
+    app._pending_approvals = []
+    app._close_requested = app._closed = False
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        reply = pool.submit(app._request_user_input, 'Which target?', ['local', 'remote'])
+        kind, question = app._events.get(timeout=3)
+        assert kind == 'user_input'
+        assert question.options == ['local', 'remote']
+        assert question.resolve('a different target')
+        assert not question.resolve('local')
+        assert reply.result(timeout=3) == 'a different target'
+        cancelled = pool.submit(app._request_user_input, 'Continue?', [])
+        _, question = app._events.get(timeout=3)
+        question.resolve(False)
+        assert cancelled.result(timeout=3) is None
+    assert app._pending_approvals == []
+
+
 def test_desktop_activity_model_marks_incomplete_outcome_as_failed():
     activity = DesktopActivityModel()
     activity.start()

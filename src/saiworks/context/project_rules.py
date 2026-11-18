@@ -44,8 +44,41 @@ class ProjectRulesLoader(ContextLoader):
                 },
             )
 
-    def _load_rules(self, cwd: Path) -> list[ProjectRule]:
-        boundary = self._project_boundary(cwd)
+    def refresh_observed_paths(self, request: UserRequest, session: SessionContext) -> None:
+        """Refresh scoped rules for authorized, structured file observations."""
+        cwd = Path(request.cwd).expanduser().resolve()
+        roots = [cwd, *(Path(path).resolve() for path in session.workspace_state.approved_roots)]
+        directories = {cwd}
+        for observation in session.observations:
+            if not observation.success or not observation.certain or not observation.target:
+                continue
+            target = Path(observation.target)
+            if not target.is_absolute():
+                continue
+            target = target.resolve()
+            if not any(target.is_relative_to(root) for root in roots):
+                continue
+            directories.add(target if target.is_dir() else target.parent)
+        rules = {}
+        for directory in sorted(directories, key=lambda item: (len(item.parts), str(item))):
+            if directory == cwd:
+                for rule in self._load_rules(cwd):
+                    rules[rule.path] = rule
+                continue
+            root = max((root for root in roots if directory.is_relative_to(root)), key=lambda item: len(item.parts))
+            boundary = root
+            for ancestor in (directory, *directory.parents):
+                if any((ancestor / marker).exists() for marker in PROJECT_BOUNDARY_MARKERS):
+                    boundary = ancestor
+                    break
+                if ancestor == root:
+                    break
+            for rule in self._load_rules(directory, boundary=boundary):
+                rules[rule.path] = rule
+        session.project_rules = list(rules.values())
+
+    def _load_rules(self, cwd: Path, *, boundary: Path | None = None) -> list[ProjectRule]:
+        boundary = boundary or self._project_boundary(cwd)
         candidates = []
         for directory in (cwd, *cwd.parents):
             path = directory / "AGENTS.md"

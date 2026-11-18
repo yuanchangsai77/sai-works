@@ -53,8 +53,6 @@ class TurnDecision:
                         "required_action": "provide_meaningful_final_answer",
                     },
                 ))
-                if state.invalid_completion_count >= 2:
-                    return self._summary(completion_problem, "stalled")
                 return None
             if state.invalid_completion_count:
                 self._feedback(ToolResult(
@@ -68,16 +66,6 @@ class TurnDecision:
             engine.capability_warehouse.release(
                 expiring_turn_capabilities, reason="turn scope consumed",
             )
-
-        if engine._has_failed_test_result(turn_results):
-            state.consecutive_failed_test_turns += 1
-            if state.consecutive_failed_test_turns >= 3:
-                return self._summary(
-                    "Stopping after 3 consecutive failing test runs. Review the latest test output before retrying.",
-                    "stalled",
-                )
-        elif turn_results:
-            state.consecutive_failed_test_turns = 0
 
         previous_results = session.tool_results[:-len(turn_results)] if turn_results else session.tool_results
         last_change = next(
@@ -95,23 +83,8 @@ class TurnDecision:
             visible_observations=session.visible_observations,
         ))
         if progress_signal is not None:
-            if state.progress_recovery_sent:
-                return self._summary(
-                    "Repeated inspection produced no new information after recovery. Resume from the recorded observations and findings.",
-                    "stalled",
-                )
-            self._feedback(engine._progress_recovery_result(progress_signal))
+            if not state.progress_recovery_sent:
+                self._feedback(engine._progress_recovery_result(progress_signal))
             state.progress_recovery_sent = True
-            state.consecutive_non_retryable_turns = 0
             return None
-
-        if turn_results and engine._all_non_retryable(turn_results):
-            state.consecutive_non_retryable_turns += 1
-            if state.consecutive_non_retryable_turns >= 2:
-                return self._summary(
-                    engine._non_retryable_failure_message(turn_results),
-                    engine._blocked_outcome(turn_results),
-                )
-        else:
-            state.consecutive_non_retryable_turns = 0
         return None

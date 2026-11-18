@@ -69,6 +69,32 @@ class ToolRegistry:
     def attach_provider(self, provider) -> None:
         self._providers.append(provider)
 
+    def capture_runtime_state(self) -> dict:
+        from .builtins.shell_exec import ShellSession
+        with self._state_lock:
+            shell = self._state.get('shell_session')
+            if isinstance(shell, ShellSession):
+                return {'shell': {'cwd': str(shell.cwd), 'workspace': shell.context.cwd, 'reset': True}}
+            cwd = self._state.get('shell_resume_cwd')
+            return {'shell': {'cwd': cwd, 'workspace': self._state.get('shell_resume_workspace'),
+                              'reset': bool(self._state.get('shell_state_lost'))}} if cwd else {}
+
+    def restore_runtime_state(self, facts: dict) -> None:
+        shell = facts.get('shell', {})
+        if isinstance(shell.get('cwd'), str):
+            self.attach_state('shell_resume_cwd', shell['cwd'])
+            self.attach_state('shell_resume_workspace', shell.get('workspace'))
+            self.attach_state('shell_state_lost', bool(shell.get('reset')))
+
+    def requires_state_replan(self, action: ToolAction) -> bool:
+        return bool(self.state_for('shell_state_lost')) and bool(
+            getattr(self._tools.get(action.name), 'uses_persistent_shell', False)
+        )
+
+    def acknowledge_runtime_state(self) -> None:
+        with self._state_lock:
+            self._state.pop('shell_state_lost', None)
+
     def refresh_providers(self) -> None:
         for provider in self._providers:
             provider_id = id(provider)

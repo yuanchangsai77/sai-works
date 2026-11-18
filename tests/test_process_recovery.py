@@ -10,7 +10,7 @@ from saiworks.types import UserRequest
 
 
 @pytest.mark.parametrize('admitted', [False, True])
-def test_real_process_crash_only_reclaims_submission_without_effectful_action(tmp_path, admitted):
+def test_real_process_crash_reclaims_owner_but_preserves_unknown_effects(tmp_path, admitted):
     if process_owner.current_owner() is None:
         pytest.skip('Requires verifiable local Linux process identity')
     path = tmp_path / 'tasks.sqlite3'
@@ -28,18 +28,20 @@ os._exit(17)
     child = subprocess.run([sys.executable, '-c', script, str(path), str(tmp_path), 'yes' if admitted else 'no'], capture_output=True, timeout=10)
     assert child.returncode == 17, child.stderr
     store = TaskStore(path)
+    store.accept(UserRequest('continue', str(tmp_path)), submission_id='new', task_id='task')
+    assert store.get_submission('old').state == 'finished'
+    assert store.claim('new')
+    with sqlite3.connect(path) as connection:
+        evidence = json.loads(connection.execute('SELECT evidence FROM submission_recoveries').fetchone()[0])
+    assert evidence['owner_stopped'] is True
+    assert evidence['effectful_actions_admitted'] is admitted
+    unknown = store.unknown_actions('task')
+    assert len(unknown) == int(admitted)
     if admitted:
-        with pytest.raises(RuntimeError, match='explicit recovery'):
-            store.accept(UserRequest('continue', str(tmp_path)), submission_id='new', task_id='task')
-        assert store.get_submission('old').state == 'running'
-    else:
-        store.accept(UserRequest('continue', str(tmp_path)), submission_id='new', task_id='task')
-        assert store.get_submission('old').state == 'finished'
-        assert store.claim('new')
-        with sqlite3.connect(path) as connection:
-            evidence = json.loads(connection.execute('SELECT evidence FROM submission_recoveries').fetchone()[0])
-        assert evidence['owner_stopped'] is True
-        assert evidence['effectful_actions_admitted'] is False
+        assert unknown[0]['state'] == 'started'
+        assert unknown[0]['submission_id'] == 'old'
+    with pytest.raises(RuntimeError, match='explicit recovery'):
+        store.accept(UserRequest('another', str(tmp_path)), submission_id='third', task_id='task')
 
 
 def test_live_owner_is_never_reclaimed(tmp_path):

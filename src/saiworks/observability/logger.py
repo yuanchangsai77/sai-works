@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+from dataclasses import asdict
 from pathlib import Path
 
 from ..safety.redaction import redact, redact_text
@@ -33,12 +34,44 @@ class InMemoryLogger:
             return compact
         return f"{compact[: limit - 3]}..."
 
+    def checkpoint_run(self) -> dict:
+        return {"run_id": self.run_id, "events": [asdict(event) for event in self.events],
+                "artifact_count": self._artifact_count, "large_values": self._large_value_artifacts,
+                "model_request_count": self._model_request_count}
+
+    def detach_run(self) -> None:
+        self.run_dir = None
+        self.run_id = None
+        self.events = []
+
+    def resume_run(self, checkpoint: dict) -> None:
+        identity = checkpoint.get('run_id')
+        if not isinstance(identity, str) or not identity:
+            raise ValueError('Continuation has no run identity')
+        root = self.base_dir.resolve()
+        directory = (root / identity).resolve()
+        if directory.parent != root:
+            raise ValueError('Continuation run is outside the log root')
+        directory.mkdir(parents=True, exist_ok=True)
+        self.run_id = self.last_run_id = identity
+        self.run_dir = directory
+        self.events = [Event(**event) for event in checkpoint['events']]
+        self._artifact_count = checkpoint['artifact_count']
+        self._large_value_artifacts = checkpoint['large_values']
+        self._model_request_count = checkpoint['model_request_count']
+        self.last_run_summary = None
+        self.record('run.resumed', {'run_id': identity})
+
     def record(self, name: str, payload: dict) -> Event:
         compact = self._compact_event_payload(name, payload)
         event = Event(name=name, payload=redact(self._externalize_large_values(compact, name)))
+        self.publish_event(event)
+        return event
+
+    def publish_event(self, event: Event) -> None:
+        """Publish an already prepared event after its authoritative commit."""
         self.events.append(event)
         self._append_event(event)
-        return event
 
     def _compact_event_payload(self, name: str, payload: dict) -> dict:
         if name == "model.request":

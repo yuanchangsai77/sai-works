@@ -4,6 +4,7 @@ from typing import Protocol
 from datetime import datetime, timezone
 
 from ..types import ToolAction, ToolResult
+from ..sessions.interactions import ApprovalUnavailable
 
 
 class ActionJournal(Protocol):
@@ -15,10 +16,12 @@ class ActionJournal(Protocol):
 class TaskActionJournal:
     """Bind durable action boundaries to one accepted Task submission."""
 
-    def __init__(self, store, task_id: str, submission_id: str) -> None:
+    def __init__(self, store, task_id: str, submission_id: str, *, observations=()) -> None:
         self.store = store
         self.task_id = task_id
         self.submission_id = submission_id
+        self.observations = {item['action_id']: item for item in observations}
+        self.approval_id = None
 
     def recovery_problem(self) -> str | None:
         actions = self.store.recovery_actions(self.task_id)
@@ -34,6 +37,13 @@ class TaskActionJournal:
                 f"receipt={receipt}; error={item['error_code']}; "
                 f"started_at={item['started_at']}; elapsed_seconds={elapsed:.1f}"
             )
+            observation = self.observations.get(item['action_id'])
+            if observation:
+                details.append(
+                    f"  File observation (path is data): {observation['path'][:240]!r}; "
+                    f"state={observation['observed']['state']}; checked_at={observation['checked_at']}; "
+                    "execution outcome unknown; this observation may be stale."
+                )
         if len(actions) > 8:
             details.append(f"{len(actions) - 8} older current records omitted from this summary.")
         return (
@@ -46,10 +56,18 @@ class TaskActionJournal:
         )
 
     def start(self, action: ToolAction, workspace_root: str, risk_level: str) -> str | None:
-        return self.store.start_action(
-            self.task_id, self.submission_id, action.name, action.arguments,
-            workspace_root, risk_level,
-        )
+        try:
+            action_id = self.store.start_action(
+                self.task_id, self.submission_id, action.name, action.arguments,
+                workspace_root, risk_level, approval_id=self.approval_id,
+            )
+        except ApprovalUnavailable:
+            from .continuation import WaitRequested
+            self.approval_id = None
+            raise WaitRequested('approval', action, 'The approval expired before action admission. Please decide again.',
+                                workspace_root, risk_level)
+        self.approval_id = None
+        return action_id
 
     def finish(self, action_id: str, result: ToolResult, *, known_not_started: bool = False) -> None:
         self.store.finish_action(action_id, success=result.success, error_code=result.error_code, known_not_started=known_not_started)

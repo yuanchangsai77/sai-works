@@ -333,7 +333,7 @@ Activity 使用纵向 execution rail 作为 SaiWorks 的标志性组件：
 - `RunDiagnostic`：run 关联、事件摘要、blocker、日志引用。
 - `ApprovalView`：意图、动作、风险、参数摘要、有效期。
 
-桌面参考应用可在同进程 controller 上实现查询适配；运行中换界面、订阅和断线恢复必须等待跨界面同步与可恢复审批的 snapshot/revision 契约。UI 不直接扫描 `.saiworks` 来构造权威状态。
+运行时已有[任务快照与修订](../reference/runtime-observation.md)及[持久化等待与续跑](../runtime/agent-runtime.md#等待与续跑)，桌面参考应用仍需迁移到统一快照订阅。运行中换界面与重新同步应复用这些现有能力；跨进程连接和脱离界面自动续跑另受服务生命周期限制。UI 不直接扫描 `.saiworks` 来构造权威状态。
 
 ## 12. 技术形态决策
 

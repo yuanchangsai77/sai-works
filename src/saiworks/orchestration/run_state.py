@@ -13,8 +13,6 @@ class RunState:
     started_at: float = field(default_factory=time.monotonic)
     model_attempts: int = 0
     consecutive_model_timeouts: int = 0
-    consecutive_non_retryable_turns: int = 0
-    consecutive_failed_test_turns: int = 0
     invalid_completion_count: int = 0
     progress_recovery_sent: bool = False
     approved_actions: set[tuple[str, str, str]] = field(default_factory=set)

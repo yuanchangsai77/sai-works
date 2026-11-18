@@ -14,6 +14,7 @@ from .permissions import PermissionContext
 from .results import ResultRecorder
 from .run_state import RunState
 from .session import SessionContext
+from .continuation import WaitRequested
 
 
 @dataclass(frozen=True, slots=True)
@@ -78,16 +79,31 @@ class ActionFlow:
         self.recorder = recorder
         self.results: list[ToolResult] = []
         self._admission_records: list | None = None
+        self.needs_replan = False
 
     def process(self, actions: Iterable[ToolAction]) -> list[ToolResult]:
+        actions = list(actions)
         pending = []
         pending_keys = set()
         admitted_steps = []
         supports = getattr(self.environment.tools, "can_batch_read", None)
         batch = getattr(self.environment.tools, "execute_read_batch", None)
         try:
-            for action in actions:
+            for index, action in enumerate(actions):
                 self.environment.raise_if_cancelled()
+                replan = getattr(self.environment.tools, 'requires_state_replan', None)
+                if callable(replan) and replan(action):
+                    self._flush_reads(pending)
+                    for deferred_action in actions[index:]:
+                        result = ToolResult(deferred_action.name, False,
+                            'This action was not dispatched: the persistent Shell environment was reset while waiting. '
+                            'The checkpoint records its last known directory; variables and functions were not restored. '
+                            'Use these facts to adjust the remaining actions or summarize. No previous command was replayed.',
+                            'progress_required', {'skipped': True})
+                        self._attach_action_metadata(result, deferred_action)
+                        self._record(result, synthetic=True)
+                    self.needs_replan = True
+                    break
                 key = self._action_key(action)
                 eligible = callable(supports) and callable(batch) and supports(
                     action, cwd=self._task_workspace_root(self.request, self.session),
@@ -119,6 +135,10 @@ class ActionFlow:
                     pending_keys.clear()
                     self._drive_steps(steps, call)
             self._flush_reads(pending)
+        except WaitRequested as waiting:
+            self._flush_reads(pending)
+            waiting.remaining_actions = actions[index:]
+            raise
         finally:
             for steps in admitted_steps:
                 steps.close()
@@ -263,7 +283,7 @@ class ActionFlow:
             approval = (
                 True
                 if self._approval_remembered(approval_key, state.approved_actions)
-                else self._approval_decision(action, decision.reason)
+                else self._approval_decision(action, decision.reason, decision.risk_level)
             )
             if approval is not True:
                 result = ToolResult(
@@ -277,7 +297,7 @@ class ActionFlow:
                 self._attach_action_metadata(result, action)
                 self._record(result, synthetic=True)
                 return
-            if decision.risk_level != "destructive":
+            if decision.risk_level != "destructive" and services.execution_context.interaction_handler is None:
                 state.approved_actions.add(approval_key)
         elif not decision.allowed:
             result = ToolResult(
@@ -384,7 +404,11 @@ class ActionFlow:
     def _approval_remembered(self, approval_key: tuple[str, str, str], approved_actions: set[tuple[str, str, str]]) -> bool:
         return approval_key[1] != "destructive" and approval_key in approved_actions
 
-    def _approval_decision(self, action, reason: str) -> bool | None:
+    def _approval_decision(self, action, reason: str, scope: str = "workspace_path") -> bool | None:
+        handler = self.environment.execution_context.interaction_handler
+        if handler is not None:
+            return handler("approval", action, reason,
+                           self._task_workspace_root(self.request, self.session), scope)
         if self.environment.approval_callback is None:
             return None
         started = time.monotonic()
@@ -452,6 +476,9 @@ class ActionFlow:
                         f"tool '{action.name}' requested access outside the current workspace: {grant_path}. "
                         "Approve only if this path is part of the task."
                     )
+                    if journal is not None and action_id is not None:
+                        journal.finish(action_id, result, known_not_started=True)
+                        action_id = None
                     approval_decision = self._approval_decision(approval, reason)
                     if approval_decision is not True:
                         ret_res = ToolResult(
@@ -501,6 +528,9 @@ class ActionFlow:
                     error_code=result.error_code,
                 )
             return result, action_id, phase
+        except WaitRequested:
+            progress_handle = None
+            raise
         finally:
             if progress_handle is not None:
                 if result is None:

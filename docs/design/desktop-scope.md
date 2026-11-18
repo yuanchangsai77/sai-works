@@ -22,7 +22,7 @@
 
 ### 跨界面观察与恢复
 
-为运行中从 CLI/TUI 切换到桌面应用，实施按 Task 的一致 Snapshot、单调 revision、多观察者、慢消费者隔离、重新同步和稳定 Task 取消。审批持久化、TTL 与 continuation 依照[审批等待与续跑设计](approval-resume.md)实施，不由桌面应用单独维护。
+为运行中从 CLI/TUI 切换到桌面应用，实施按 Task 的一致 Snapshot、单调 revision、多观察者、慢消费者隔离、重新同步和稳定 Task 取消。审批持久化、TTL 与 continuation 复用[现行等待与续跑](../runtime/agent-runtime.md#等待与续跑)，不由桌面应用单独维护。
 
 ### 关闭窗口后继续运行
 

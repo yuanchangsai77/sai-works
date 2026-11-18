@@ -45,6 +45,7 @@ class SessionContext:
     workspace_summary: WorkspaceSummary | None = None
     explicit_context: list[ExplicitContextItem] = field(default_factory=list)
     external_tool_statuses: list[dict[str, object]] = field(default_factory=list)
+    recovery_facts: str = ""
     checkpoint: TaskCheckpoint = field(default_factory=TaskCheckpoint)
     cancellation: threading.Event | None = None
     before_model_request: Callable[[], None] | None = None

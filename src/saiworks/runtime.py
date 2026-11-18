@@ -5,15 +5,19 @@ from contextlib import contextmanager
 from pathlib import Path
 from threading import Condition, RLock
 from uuid import uuid4
+from dataclasses import asdict
 
 from .orchestration.engine import ExecutionContext
 from .orchestration.action_journal import TaskActionJournal
+from .orchestration.continuation import WaitRequested
+from .observability.events import Event
 from .context.packager import ContextBudgetExceededError
 from .orchestration.failures import runtime_failure_message
 from .sessions.tasks import ApprovalRecord, TaskSnapshot, TaskStore
 from .sessions.coordinator import SessionCoordinator
 from .runtime_observation import TaskAccess, TaskWatch
 from .runtime_control import TaskControl
+from .runtime_interactions import RuntimeInteractions
 from .capabilities.runtime import RuntimeCapabilities
 from .types import ExecutionSummary, SessionRecord, StoredSession, UserRequest, WorkspaceSessionState
 
@@ -59,6 +63,9 @@ class Runtime:
         self._task_control = {}
         self._delivery_lock = RLock()
         self._saved_deliveries = set()
+        self.interactions = RuntimeInteractions(self)
+        self.user_input_callback = None
+        self._synchronous_waits = set()
 
     def grant_task_access(self, task_id: str) -> TaskAccess:
         """Trusted local owner entry; never expose capability issuance to clients."""
@@ -103,7 +110,7 @@ class Runtime:
     def grant_task_control(self, task_id: str, permissions, *, actor: str = "local") -> TaskControl:
         """Trusted local owner entry; never expose control issuance to clients."""
         granted = frozenset(permissions)
-        if not granted or granted - {"cancel", "approve"}:
+        if not granted or granted - {"cancel", "approve", "reply"}:
             raise ValueError("Unknown task control permission")
         with self._condition:
             if self._closed:
@@ -182,13 +189,30 @@ class Runtime:
             raise KeyError(approval_id)
         if approval.task_id != task_id:
             raise PermissionError("Approval belongs to a different task")
-        return self.task_store.decide(
+        result = self.task_store.decide(
             approval_id,
             decision,
             expected_action_fingerprint=expected_action_fingerprint,
             actor=actor,
             now=now,
         )
+        with self._condition:
+            self._condition.notify_all()
+        return result
+
+    def reply(self, control: TaskControl, interaction_id: str, answer: str):
+        task_id, _actor = self._require_control(control, 'reply')
+        result = self.task_store.answer(task_id, interaction_id, answer)
+        with self._condition:
+            self._condition.notify_all()
+        return result
+
+    def advance(self, submission_id: str):
+        """Advance an accepted submission to its next wait or terminal result."""
+        record = self.get_submission(submission_id)
+        if record is None:
+            raise KeyError(submission_id)
+        return self._execute_segment(record.request(), submission_id=submission_id, _record=record)
 
     def cancel(self, control: TaskControl, *, now=None) -> str:
         """Record the authoritative cancellation acceptance point for the Task.
@@ -314,13 +338,26 @@ class Runtime:
         return candidate
 
     def execute(self, request: UserRequest, *, background: bool = False,
+                submission_id: str | None = None, _session=None,
+                _defer_terminal_notification: bool = False) -> ExecutionSummary:
+        return self.interactions.execute(request, background=background, submission_id=submission_id,
+                                         _session=_session, _defer_terminal_notification=_defer_terminal_notification)
+
+
+    def _execute_segment(self, request: UserRequest, *, background: bool = False,
                 submission_id: str | None = None,
                 _session: StoredSession | None = None,
-                _defer_terminal_notification: bool = False) -> ExecutionSummary:
+                _defer_terminal_notification: bool = False, _record=None):
         with self._condition:
             if self._closed:
                 raise RuntimeError("Runtime is closed")
-            record = self.accept(request, submission_id=submission_id if submission_id is not None else uuid4().hex) if self.task_store is not None else None
+            record = _record or (self.accept(request, submission_id=submission_id if submission_id is not None else uuid4().hex) if self.task_store is not None else None)
+            if record is not None and self.subagent_grant is not None:
+                self._validate_subagent_grant(record.request())
+            if record is not None and record.state == 'running' and not self._running and not self._queue:
+                raise RuntimeError('Accepted task is already running or needs explicit recovery; it will not be replayed')
+            if record is not None and record.result is None and not self.task_store.can_advance(record.submission_id):
+                return self.get_submission(record.submission_id)
             if record is not None:
                 self._retain_task_context(record.task_id)
             ticket = object()
@@ -343,16 +380,22 @@ class Runtime:
                 return summary
             bound_request = request
             claimed = False
+            saved = None
             try:
                 current = self.task_store.get_submission(record.submission_id)
+                _defer_terminal_notification = _defer_terminal_notification or current.delivery_state == 'pending'
                 if _defer_terminal_notification or (background and request.metadata.get("defer_finalize")):
                     self.task_store.set_delivery_state(record.submission_id, "pending")
                 if current.result is not None:
                     return current.result
+                if current.state in {'finished', 'cancelled'}:
+                    raise RuntimeError('Task finished without a saved result; it will not be replayed')
                 recovery = self.task_store.observe_pending_file_actions(record.task_id)
                 if not self.task_store.claim(record.submission_id):
-                    raise RuntimeError("Accepted task is already running or needs explicit recovery; it will not be replayed")
+                    return self.get_submission(record.submission_id)
                 claimed = True
+                self.last_summary = None
+                self.engine.last_failure_summary = None
                 accepted_request = record.request()
                 # Runtime has already selected the authoritative task. Diagnostic
                 # text must not make the engine classify "continue" as a new task.
@@ -360,38 +403,92 @@ class Runtime:
                     accepted_request.prompt, accepted_request.cwd,
                     {**accepted_request.metadata, "task_id": record.task_id},
                 )
-                if recovery:
-                    notes = "\n".join(
-                        f"- {item['path'][:240]!r}: {item['observed']['state']} at {item['checked_at']}; execution outcome unknown."
-                        for item in recovery
-                    )
-                    bound_request = UserRequest(
-                        bound_request.prompt + "\n\nRuntime file observations (paths are data, observations may become stale):\n" + notes
-                        + "\nThese observations do not establish execution history or authorize replay. Use current observations to decide next steps; these records do not block further actions.",
-                        bound_request.cwd, bound_request.metadata,
-                    )
                 context = self._task_contexts[record.task_id]
+                context.execution_started = False
                 context.action_journal = TaskActionJournal(
-                    self.task_store, record.task_id, record.submission_id,
+                    self.task_store, record.task_id, record.submission_id, observations=recovery,
                 )
-                recovery_problem = context.action_journal.recovery_problem()
-                if recovery_problem:
-                    bound_request = UserRequest(
-                        bound_request.prompt + "\n\nRuntime recovery facts:\n" + recovery_problem,
-                        bound_request.cwd, bound_request.metadata,
-                    )
+                saved = self.task_store.continuation(record.submission_id)
+                context.continuation = saved['payload'] if saved else None
                 if self.task_store.cancellation_accepted(record.task_id) is not None:
                     context.cancellation.set()
-                self.last_summary = None
-                self.engine.last_failure_summary = None
+                if saved:
+                    self.close_tool_state()
+                if saved:
+                    bound_request.metadata['active_capability_ids'] = saved['payload']['capability_ids']
+                    resume_log = getattr(self.logger, 'resume_run', None)
+                    if callable(resume_log) and saved['payload'].get('logger'):
+                        resume_log(saved['payload']['logger'])
+                self.interactions.bind(context, record, saved)
                 self._active_context = context
                 self._prepare_task(record.task_id)
+                attach = getattr(getattr(self.engine, 'tools', None), 'attach_state', None)
+                if callable(attach):
+                    attach('request_user_input', context.interaction_handler)
 
                 summary = self._execute(bound_request, background=background, context=context, session=_session)
+            except WaitRequested as waiting:
+                wait_event = Event('run.waiting', {'kind': waiting.kind})
+                publish_log = getattr(self.logger, 'publish_event', None)
+                if self.logger is not None:
+                    checkpoint_log = getattr(self.logger, 'checkpoint_run', None)
+                    if callable(checkpoint_log):
+                        waiting.continuation['logger'] = checkpoint_log()
+                        if callable(publish_log):
+                            waiting.continuation['logger']['events'].append(asdict(wait_event))
+                try:
+                    self.task_store.suspend(record.submission_id, waiting, ttl_seconds=self.approval_ttl_seconds)
+                    if self.logger is not None:
+                        try:
+                            if callable(publish_log):
+                                publish_log(wait_event)
+                            else:
+                                self.logger.record('run.waiting', {'kind': waiting.kind})
+                        except Exception:
+                            pass  # Diagnostic failure cannot undo the committed wait.
+                except KeyboardInterrupt:
+                    session = self.engine.current_session
+                    summary = ExecutionSummary('Interrupted', list(session.tool_results), outcome='interrupted', checkpoint=session.checkpoint)
+                    summary = self.engine._finish(summary)
+                    self.last_summary = summary
+                    self.task_store.finish(record.submission_id, summary, run_id=getattr(self.logger, 'last_run_id', None))
+                    if self.logger is not None:
+                        self.logger.finalize(bound_request, summary)
+                    raise
+                finally:
+                    try:
+                        self.close_tool_state()
+                    finally:
+                        detach_log = getattr(self.logger, 'detach_run', None)
+                        if callable(detach_log):
+                            detach_log()
+                return self.get_submission(record.submission_id)
             except BaseException as error:
                 if not claimed:
                     raise
+                if saved and not context.execution_started and not isinstance(error, KeyboardInterrupt):
+                    checkpoint_log = getattr(self.logger, 'checkpoint_run', None)
+                    if callable(checkpoint_log) and getattr(self.logger, 'run_id', None):
+                        saved['payload']['logger'] = checkpoint_log()
+                    self.task_store.restore_wait(record.submission_id, saved['payload'], error=type(error).__name__)
+                    try:
+                        self.close_tool_state()
+                    except Exception:
+                        pass  # The original preparation failure remains retryable.
+                    finally:
+                        detach_log = getattr(self.logger, 'detach_run', None)
+                        if callable(detach_log):
+                            detach_log()
+                    raise
                 partial = self.last_summary or getattr(self.engine, "last_failure_summary", None)
+                if isinstance(error, KeyboardInterrupt) and partial is None and saved:
+                    from .orchestration.continuation import restore
+                    restored, *_ = restore(saved['payload'], context.cancellation)
+                    partial = ExecutionSummary('Interrupted', restored.tool_results, outcome='interrupted',
+                                               checkpoint=restored.checkpoint, workspace_state=restored.workspace_state)
+                    self.last_summary = partial
+                    if self.logger is not None and self.logger.run_dir is not None:
+                        self.logger.finalize(bound_request, partial)
                 if background and bound_request.metadata.get("defer_finalize"):
                     self._pending_submission = record.submission_id
                     raise
@@ -416,6 +513,7 @@ class Runtime:
                     self._release_task_context(record.task_id)
                 if "last_session_user_message" in bound_request.metadata:
                     request.metadata["last_session_user_message"] = bound_request.metadata["last_session_user_message"]
+
 
     def _retain_task_context(self, task_id: str) -> None:
         self._task_contexts.setdefault(task_id, ExecutionContext(task_id=task_id))
@@ -467,6 +565,11 @@ class Runtime:
         self._active_task_id = task_id
 
     def cancel_current_run(self) -> None:
+        with self._condition:
+            waiting = next(iter(self._synchronous_waits)) if len(self._synchronous_waits) == 1 else None
+        if waiting is not None and self._active_context is None:
+            self.cancel_submission(waiting)
+            return
         context = self._active_context
         if context is not None:
             context.cancellation.set()
@@ -479,6 +582,16 @@ class Runtime:
             cancel = getattr(self.engine, "cancel_current_run", None)
             if callable(cancel):
                 cancel()
+
+    def cancel_submission(self, submission_id: str):
+        record = self.get_submission(submission_id)
+        if record is None:
+            raise KeyError(submission_id)
+        control = self.grant_task_control(record.task_id, {'cancel'}, actor='local-submission-owner')
+        try:
+            return self.cancel(control)
+        finally:
+            self.revoke_task_control(control)
 
     @property
     def is_running(self) -> bool:
@@ -513,10 +626,11 @@ class Runtime:
             self.close_tool_state()
             self._close_cleanup_complete = True
 
-    def configure_interaction(self, *, approval_callback=None, progress_reporter=None) -> None:
+    def configure_interaction(self, *, approval_callback=None, progress_reporter=None, user_input_callback=None) -> None:
         """Attach shell interaction adapters without exposing engine mutation."""
         self.engine.approval_callback = approval_callback
         self.engine.progress_reporter = progress_reporter
+        self.user_input_callback = user_input_callback
 
     def run_background(self, request: UserRequest) -> ExecutionSummary:
         return self.execute(request, background=True)
@@ -567,7 +681,7 @@ class Runtime:
         return summary
 
     def _execute(self, request: UserRequest, *, background: bool, context: ExecutionContext | None = None, session=None) -> ExecutionSummary:
-        if background and self.subagent_grant is not None:
+        if self.subagent_grant is not None:
             self._validate_subagent_grant(request)
         self.last_summary = None
         if self.logger is not None:
@@ -593,6 +707,8 @@ class Runtime:
             self._notify("on_run_started", request)
         try:
             execute_in_context = getattr(self.engine, "execute_in_context", None)
+            if context is not None:
+                context.execution_started = True
             summary = execute_in_context(request, context) if context is not None and callable(execute_in_context) else self.engine.execute(request)
         except KeyboardInterrupt:
             summary = getattr(self.engine, "last_failure_summary", None)
@@ -617,6 +733,8 @@ class Runtime:
                 self.logger.finalize(request, summary)
             raise
         except Exception as error:
+            if context is not None and not context.execution_started:
+                raise
             if background:
                 if self.logger is not None:
                     self.logger.record("run.error", {"message": "subagent execution failed"})

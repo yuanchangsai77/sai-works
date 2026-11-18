@@ -32,9 +32,9 @@ def test_analysis_loop_with_varied_read_parameters_gets_recovery_then_stops_or_f
 
     logger = InMemoryLogger()
     model = Model()
-    summary = engine(model, logger).execute(UserRequest("只分析设计，不修改文件", str(tmp_path)))
-    assert model.calls == 4
-    assert summary.outcome == ("completed" if recover else "stalled")
+    summary = engine(model, logger, max_turns=6).execute(UserRequest("只分析设计，不修改文件", str(tmp_path)))
+    assert model.calls == (4 if recover else 6)
+    assert summary.outcome == ("completed" if recover else "exhausted")
     assert any(result.error_code == "progress_required" for result in summary.tool_results)
     assert (tmp_path / "design.md").read_text() == "one design finding\n"
 
@@ -87,12 +87,12 @@ def test_successful_execute_does_not_erase_semantic_read_loop_detection(tmp_path
 
     logger = InMemoryLogger()
     model = Model()
-    runtime = engine(model, logger)
+    runtime = engine(model, logger, max_turns=6)
     runtime.tools.register(SimpleTool(name="noop_execute", description="Test execution.", arguments={"attempt": "iteration"},
                                       risk_level="execute", handler=lambda _action, _context: ToolResult("noop_execute", True, "ok")))
     summary = runtime.execute(UserRequest("review", str(tmp_path)))
-    assert model.calls == 4
-    assert summary.outcome == "stalled"
+    assert model.calls == 6
+    assert summary.outcome == "exhausted"
     assert any(result.error_code == "progress_required" for result in summary.tool_results)
 
 
@@ -190,7 +190,7 @@ def test_default_run_has_no_wall_clock_limit(tmp_path, monkeypatch):
 
     logger = InMemoryLogger()
     model = Model()
-    summary = engine(model, logger).execute(UserRequest("review", str(tmp_path)))
+    summary = engine(model, logger, max_turns=6).execute(UserRequest("review", str(tmp_path)))
     assert model.calls == 2
     assert summary.outcome == "completed"
 
@@ -351,7 +351,7 @@ def test_distinct_negative_searches_complete_without_false_progress_recovery(tmp
 
     logger = InMemoryLogger()
     model = Model()
-    summary = engine(model, logger).execute(UserRequest("Identify the frontend framework.", str(tmp_path)))
+    summary = engine(model, logger, max_turns=6).execute(UserRequest("Identify the frontend framework.", str(tmp_path)))
     assert summary.outcome == "completed"
     assert model.calls == 5
     assert not any(result.error_code == "progress_required" for result in summary.tool_results)
@@ -374,7 +374,7 @@ def test_new_extension_results_keep_progress_despite_repeated_config_reads(tmp_p
 
     logger = InMemoryLogger()
     model = Model()
-    runtime = engine(model, logger)
+    runtime = engine(model, logger, max_turns=6)
     runtime.tools.register(SimpleTool(
         name="lookup_record", description="Retrieve a distinct record.", arguments={"id": "Record id"},
         handler=lambda action, _context: ToolResult("lookup_record", True, f"new record {action.arguments['id']}"),

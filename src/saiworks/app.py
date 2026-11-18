@@ -302,6 +302,7 @@ def create_app(
     if not background:
         runtime.configure_interaction(
             approval_callback=presenter.confirm_tool_action,
+            user_input_callback=presenter.request_user_input,
             progress_reporter=presenter,
         )
     return CLI(

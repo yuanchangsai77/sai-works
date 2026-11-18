@@ -12,7 +12,7 @@ Runtime 的可信装配方调用 `grant_task_access(task_id)` 获取仅含观察
 
 ## 快照与交付
 
-TaskSnapshot 包含 task_id、revision、state、current_submission_id 和按接受顺序排列的 submissions。每个提交包含现有 TaskRecord 的字段及 delivery_state；结果、错误和运行身份归属对应提交，不将历史错误覆盖到新尝试。聚合状态优先 running，其次 queued，否则取最新提交状态；当前提交取最早 running，其次最早 queued，否则最新提交。revision 与所有提交从同一 SQLite 读取事务取得；接受、取得执行权、提交结果、交付状态变化均在各自写事务中递增 Task revision。重复接受和无变化操作不递增。
+TaskSnapshot 包含 task_id、revision、state、current_submission_id、按接受顺序排列的 submissions，以及 pending_interactions。等待项包含 interaction_id、submission_id、kind、question、options 和 state，不包含续跑材料或原始动作参数；审批等待以相同身份关联审批记录，用户等待通过回复接口处理。每个提交包含现有 TaskRecord 的字段及 delivery_state；结果、错误和运行身份归属对应提交，不将历史错误覆盖到新尝试。聚合状态优先 running，其次等待，随后 queued，否则取最新提交状态；当前提交取最早 running，其次最早等待、最早 queued，否则最新提交。revision 与所有提交从同一 SQLite 读取事务取得；接受、取得执行权、保存等待、回复、批准消费、提交结果和交付状态变化均在各自写事务中递增 Task revision。重复接受和无变化操作不递增。
 
 delivery_state 区分 not_required、pending、completed。会话型或延迟交付执行在取得执行权前记录 pending；执行结果持久化后可以显示 finished，但 pending 不表示会话已交付。只有会话保存成功后才记录 completed，再发布旧完成通知。会话保存失败保持 pending，重试只补交付，不重放已完成执行。会话已保存但交付标记写入失败时，同样保留 pending 并抑制完成通知；pending 不能证明会话未保存，该窗口需要核对会话事实，不承诺跨库原子提交或自动补交付。旧记录无法证明交付是否完成，升级时标记 unknown，不伪造完成；unknown 不触发自动补执行。
 

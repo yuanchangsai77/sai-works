@@ -112,7 +112,8 @@ def test_partial_effect_informs_model_and_allows_its_recovery_actions(tmp_path):
             self.turns += 1
             if self.turns == 1:
                 return ModelReply('create', actions=[ToolAction('patch', {'diff': DIFF})], done=True)
-            assert 'execution outcome unknown' in session.request.prompt
+            assert 'execution outcome unknown' in session.recovery_facts
+            assert session.request.prompt == 'continue'
             return ModelReply('inspect then write', actions=[ToolAction('inspect'), ToolAction('write_more')], done=True)
 
     logger = InMemoryLogger(base_dir=str(tmp_path / 'runs'))

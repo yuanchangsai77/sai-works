@@ -4,6 +4,7 @@ from ..project import ProjectDetector
 from ..safety.content import build_content_safety_interceptors
 from .base import Tool
 from .registry import ToolRegistry
+from .builtins.request_user_input import tool as request_user_input_tool
 from .builtins import (
     file_info_tool,
     find_files_tool,
@@ -47,6 +48,7 @@ class BuiltinToolProvider:
 
     def get_core_tools(self) -> list[Tool]:
         return [
+            request_user_input_tool(),
             list_dir_tool(getattr(self.limits, "list_dir_entries", 200)),
             read_file_tool(getattr(self.limits, "read_file_bytes", 64_000)),
             file_info_tool(),

@@ -83,6 +83,8 @@ class SimpleTool:
     observation_valid: Callable | None = None
     # Internal opt-in: handler may run with isolated read-only batch state.
     parallel_read: bool = False
+    # Internal execution dependency; not part of the model's tool schema.
+    uses_persistent_shell: bool = False
 
     def run(self, action: ToolAction, context: ToolContext) -> ToolResult:
         return self.handler(action, context)

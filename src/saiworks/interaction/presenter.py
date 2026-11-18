@@ -28,6 +28,13 @@ class ConsolePresenter:
     def _print(self, value: str = "") -> None:
         print(value, file=getattr(self, "_output", sys.stdout))
 
+    def request_user_input(self, question: str, options: list[str]):
+        self._print(question)
+        if options:
+            self._print('Suggested answers: ' + ' / '.join(options))
+        self._print('Leave blank to cancel this task.')
+        return self.prompt_input(engine=self._engine or getattr(self, 'engine', None)) or None
+
     def _print_many(self, values: list[str]) -> None:
         out = getattr(self, "_output", sys.stdout)
         for value in values:

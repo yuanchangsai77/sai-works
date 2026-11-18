@@ -564,7 +564,7 @@ def test_text_protocol_messages_only_emit_role_and_content(tmp_path):
     assert session.visible_observations
 
 
-def test_cached_read_only_loop_still_recovers_then_stops(tmp_path):
+def test_cached_read_only_loop_advises_once_and_stops_at_budget(tmp_path):
     from saiworks.orchestration.engine import ExecutionEngine
     from saiworks.safety.guardrails import Guardrails
     from saiworks.safety.policy import DefaultPolicy
@@ -589,10 +589,11 @@ def test_cached_read_only_loop_still_recovers_then_stops(tmp_path):
         tools=build_builtin_registry(logger),
         logger=logger,
         guardrails=Guardrails(DefaultPolicy(mode="auto"), logger),
+        max_turns=6,
     )
     summary = engine.execute(UserRequest("review", str(tmp_path)))
-    assert model.calls == 4
-    assert summary.outcome == "stalled"
+    assert model.calls == 6
+    assert summary.outcome == "exhausted"
     assert (
         sum(result.error_code == "progress_required" for result in summary.tool_results)
         == 1

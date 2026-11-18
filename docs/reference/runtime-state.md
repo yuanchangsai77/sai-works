@@ -15,7 +15,7 @@ TaskStatus 与 Run outcome 是不同层级。任务状态为 pending、in_progre
 
 同进程运行中断信号若在工具执行期间到达，工具返回的结果仍先记录到观察和检查点，Run 随后以 `interrupted` 收尾。CLI/TUI/桌面应用或其他消费者应按 `interrupted` 展示，不把工具成功等同于 Run 完成。按 Task 持久化接受取消后，Runtime 已通知对应上下文并桥接活动 Run；取消接受与新动作启动在 TaskStore 中排序。该机制不承诺外部副作用立即停止，详见[任务控制与审批](runtime-control.md)。
 
-独立 Runtime 接受记录的 queued/running/cancelled/finished 不替代上述状态；接受事务与提交重试见[持久化接受参考](runtime-acceptance.md)。
+独立 Runtime 接受记录的 queued/running/waiting_approval/waiting_user/cancelled/finished 不替代上述状态；接受事务与提交重试见[持久化接受参考](runtime-acceptance.md)。
 
 ## 当前任务状态迁移
 

@@ -9,6 +9,7 @@ from .desktop import DesktopController, DesktopResultView
 from .desktop_presenter import (
     ActivityStep,
     DesktopApprovalRequest,
+    DesktopUserInputRequest,
     DesktopActivityModel,
     DesktopProgressReporter,
     format_approval_prompt,
@@ -18,6 +19,7 @@ from .desktop_windows import (
     QuickAction,
     open_run_logs,
     show_approval_dialog,
+    show_user_input_dialog,
     show_command_palette,
     show_diagnostics_window,
 )
@@ -55,7 +57,7 @@ class DesktopApp:
         self._activity = DesktopActivityModel()
         self._task_items = ()
         self._approval_lock = Lock()
-        self._pending_approvals: list[DesktopApprovalRequest] = []
+        self._pending_approvals: list[DesktopApprovalRequest | DesktopUserInputRequest] = []
         self._approval_dialogs = {}
 
         root.title("SaiWorks")
@@ -72,6 +74,7 @@ class DesktopApp:
 
         runtime.configure_interaction(
             approval_callback=self._request_approval,
+            user_input_callback=self._request_user_input,
             progress_reporter=DesktopProgressReporter(self._post_status, lambda channel, text: self._events.put(("stream", (channel, text)))),
         )
         self._event_timer = root.after(50, self._drain_events)
@@ -344,11 +347,18 @@ class DesktopApp:
 
     def _request_approval(self, action, reason: str) -> bool:
         request = DesktopApprovalRequest(action, reason)
+        return self._wait_for_request('approval', request)
+
+    def _request_user_input(self, question, options):
+        return self._wait_for_request('user_input', DesktopUserInputRequest(question, options))
+
+    def _wait_for_request(self, kind, request):
         with self._approval_lock:
             if self._close_requested or self._closed:
-                return False
+                request.resolve(False)
+                return request.wait()
             self._pending_approvals.append(request)
-        self._events.put(("approval", request))
+        self._events.put((kind, request))
         try:
             return request.wait()
         finally:
@@ -365,7 +375,7 @@ class DesktopApp:
         for request in pending:
             request.resolve(False)
 
-    def _resolve_approval(self, request: DesktopApprovalRequest, approved: bool) -> None:
+    def _resolve_approval(self, request: DesktopApprovalRequest | DesktopUserInputRequest, approved: bool | str | None) -> None:
         self._approval_dialogs.pop(request, None)
         request.resolve(approved)
 
@@ -390,6 +400,16 @@ class DesktopApp:
             elif kind == "status":
                 self.status.set(str(value))
                 self._record_activity(str(value))
+            elif kind == 'user_input':
+                request = value
+                if request.is_resolved or self._close_requested:
+                    request.resolve(False)
+                    continue
+                self._record_activity('Waiting for your decision')
+                self.status.set('Waiting for your decision')
+                self._approval_dialogs[request] = show_user_input_dialog(
+                    self.root, self.tk, self.ttk, request.question, request.options,
+                    lambda answer, current=request: self._resolve_approval(current, answer))
             elif kind == "approval":
                 request = value
                 if request.is_resolved or self._close_requested:
@@ -428,6 +448,10 @@ class DesktopApp:
                 self.messagebox.showerror("Run failed", str(value))
                 self._close_if_requested()
         if not self._closed:
+            if getattr(self, "_running", False):
+                headline = self._activity.waiting_headline()
+                if self.progress_text.get() != headline:
+                    self.progress_text.set(headline)
             self._event_timer = self.root.after(50, self._drain_events)
 
     def _set_running(self, running: bool) -> None:

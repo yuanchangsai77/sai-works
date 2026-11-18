@@ -22,13 +22,14 @@ from ..types import (
     WorkspaceSessionState,
 )
 from .action_journal import ActionJournal
+from .continuation import WaitRequested, capture as capture_continuation, restore as restore_continuation
 from .actions import ActionEnvironment, ActionFlow
 from .control import CompletionPolicy, RunBudgetPolicy
 from .ext import ContextLoader
 from .failures import runtime_failure_message, runtime_failure_retryability
 from .finalize import RunFinalizer
 from .guidance import select_operation_guidance
-from .model_turn import ModelTurn
+from .model_turn import ModelTurn, RunBudgetReached
 from .permissions import PermissionContext
 from .progress import (
     DefaultProgressPolicy,
@@ -54,6 +55,9 @@ class ExecutionContext:
     terminal_summary: ExecutionSummary | None = None
     approval_wait_seconds: float = 0.0
     action_journal: ActionJournal | None = None
+    continuation: dict | None = None
+    interaction_handler: object | None = None
+    execution_started: bool = False
 
 
 class ExecutionEngine:
@@ -174,12 +178,25 @@ class ExecutionEngine:
                 context.tools_closed = False
                 context.terminal_summary = None
                 context.approval_wait_seconds = 0.0
+                context.execution_started = context.continuation is None
                 self.last_failure_summary = None
             try:
                 self._raise_if_cancelled()
                 return self._execute(request)
+            except RunBudgetReached as error:
+                if not context.execution_started and context.continuation is not None:
+                    self.current_session, self._run_state, *_ = restore_continuation(context.continuation, context.cancellation)
+                if self.current_session is None:
+                    if context.continuation is not None:
+                        self.current_session, self._run_state, *_ = restore_continuation(context.continuation, context.cancellation)
+                    else:
+                        self.current_session = SessionContext(request=request, checkpoint=self._initial_checkpoint(request))
+                return self._finish(self._budget_summary(self.current_session, error.blocker))
             except KeyboardInterrupt:
                 session = self.current_session
+                if context.continuation is not None and (session is None or not context.execution_started):
+                    session, self._run_state, *_ = restore_continuation(context.continuation, context.cancellation)
+                    self.current_session = session
                 summary = ExecutionSummary(
                     final_message="Interrupted",
                     tool_results=list(session.tool_results) if session is not None else [],
@@ -190,6 +207,8 @@ class ExecutionEngine:
                 self.last_failure_summary = self._finish(summary)
                 raise
             except Exception as error:
+                if not context.execution_started:
+                    raise
                 self.last_failure_summary = self._finish(self._runtime_failure_summary(error))
                 raise
         finally:
@@ -251,9 +270,15 @@ class ExecutionEngine:
             session_key,
             request.metadata.get("active_capability_ids", []),
         )
+        continuation = self._execution_context.continuation
+        if continuation is not None and self.capability_warehouse is not None:
+            for identity, scope in continuation.get('capability_scopes', {}).items():
+                self.capability_warehouse.activate([identity], scope=scope, reason='resume saved activation')
         attach_state = getattr(self.tools, "attach_state", None)
         if callable(attach_state):
             attach_state("active_session_id", session_key)
+            if self._execution_context.interaction_handler is not None:
+                attach_state('request_user_input', self._execution_context.interaction_handler)
         self._keep_tool_state = session_key is not None
         permissions = PermissionContext()
         available_tools = self._available_tool_definitions(request)
@@ -299,6 +324,27 @@ class ExecutionEngine:
         state.started_at = time.monotonic()
         session.cancellation = self._execution_context.cancellation
 
+        pending_reply, pending_actions, pending_results = None, [], []
+        if self._execution_context.continuation is not None:
+            session, state, permissions, pending_reply, pending_actions, pending_results = restore_continuation(
+                self._execution_context.continuation, self._execution_context.cancellation,
+            )
+            self.current_session, self._run_state = session, state
+            request = session.request
+            self._execution_context.continuation = None
+            restore_tools = getattr(self.tools, 'restore_runtime_state', None)
+            facts = continuation.get('tool_state', {})
+            if callable(restore_tools):
+                restore_tools(facts)
+            if facts.get('shell'):
+                session.checkpoint.runtime_state['shell_cwd'] = facts['shell']['cwd']
+                if facts['shell'].get('reset'):
+                    session.checkpoint.runtime_state['shell_recovery'] = (
+                        'Previous Shell state is unavailable after waiting. The last known directory will be revalidated; '
+                        'variables and functions were not restored. Pending dependent actions need adaptation.'
+                    )
+
+        self._execution_context.execution_started = True
         model_turn = ModelTurn(self, session, state)
         recorder = ResultRecorder(self.logger, session, self._refresh_task_workspace_context)
         turn_decision = TurnDecision(self, session, state, request_intent, recorder)
@@ -316,7 +362,41 @@ class ExecutionEngine:
             max_duplicate_skips=self.max_duplicate_skips,
         )
 
-        for turn in range(1, self.max_turns + 1):
+        def process_actions(reply, actions, previous_results=()):
+            flow = ActionFlow(action_environment, request, session, permissions, state,
+                              {item.name for item in session.available_tools}, recorder)
+            try:
+                results = [*previous_results, *flow.process(actions)]
+                if flow.needs_replan:
+                    reply.done = False
+                return results
+            except WaitRequested as waiting:
+                ids = self.capability_warehouse.active_ids() if self.capability_warehouse else []
+                waiting.continuation = capture_continuation(
+                    session, state, permissions, reply, waiting.remaining_actions,
+                    [*previous_results, *flow.results], ids,
+                )
+                if self.capability_warehouse is not None:
+                    waiting.continuation['capability_scopes'] = self.capability_warehouse.activation_scopes()
+                capture_tools = getattr(self.tools, 'capture_runtime_state', None)
+                if callable(capture_tools):
+                    waiting.continuation['tool_state'] = capture_tools()
+                raise
+
+        if pending_reply is not None:
+            time_problem = self.run_budget_policy.problem(state.started_at, 0, 0)
+            if time_problem is not None:
+                return self._finish(self._budget_summary(session, time_problem))
+            original_names = {item.name for item in session.available_tools}
+            session.available_tools = [item for item in self._available_tool_definitions(request) if item.name in original_names]
+            results = process_actions(pending_reply, pending_actions, pending_results)
+            self._raise_if_cancelled()
+            expiring = self.capability_warehouse.active_ids({'turn'}) if self.capability_warehouse else []
+            summary = turn_decision.evaluate(pending_reply, results, expiring)
+            if summary is not None:
+                return self._finish(summary)
+
+        for turn in range(state.turn_count + 1, self.max_turns + 1):
             state.turn_count = turn
             self._raise_if_cancelled()
             budget_problem = self._run_budget_problem(
@@ -368,10 +448,7 @@ class ExecutionEngine:
                 },
             )
 
-            turn_results = ActionFlow(
-                action_environment,
-                request, session, permissions, state, visible_tool_names, recorder,
-            ).process(reply.actions)
+            turn_results = process_actions(reply, reply.actions)
             self._raise_if_cancelled()
 
             summary = turn_decision.evaluate(reply, turn_results, expiring_turn_capabilities)
@@ -390,6 +467,10 @@ class ExecutionEngine:
     def _raise_if_cancelled(self) -> None:
         if self._execution_context.cancellation.is_set():
             raise KeyboardInterrupt
+        state = self._run_state
+        problem = self.run_budget_policy.problem(state.started_at + state.approval_wait_seconds, 0, 0)
+        if problem is not None:
+            raise RunBudgetReached(problem)
 
     def _finish(self, summary: ExecutionSummary) -> ExecutionSummary:
         return RunFinalizer(self).finish(summary)
@@ -625,11 +706,11 @@ class ExecutionEngine:
         }
         for result in reversed(results):
             if result.success:
-                later_successes.add(self._result_identity(result))
+                later_successes.add(result.name)
                 continue
             if result.error_code in advisory_error_codes:
                 continue
-            if self._result_identity(result) in later_successes:
+            if result.name in later_successes:
                 continue
             unresolved.append(result)
         return list(reversed(unresolved))
@@ -680,15 +761,6 @@ class ExecutionEngine:
         """Resolve failures by later success of the same tool, not unrelated activity."""
         return self._terminal_outcome(self._unresolved_results(results))
 
-    def _result_identity(self, result: ToolResult) -> str:
-        arguments = result.metadata.get("action_arguments")
-        return json.dumps(
-            {"name": result.name, "arguments": arguments if isinstance(arguments, dict) else None},
-            ensure_ascii=False,
-            sort_keys=True,
-            default=str,
-        )
-
     def _blocked_outcome(self, results: list[ToolResult], *, default: str = "stalled") -> str:
         error_codes = {result.error_code for result in results if not result.success}
         if error_codes & {
@@ -714,6 +786,7 @@ class ExecutionEngine:
         contract = request.metadata.get("delegated_task")
         if not isinstance(contract, dict):
             return [item for item in definitions if item.name not in self.subagent_only_tools]
+        definitions = [item for item in definitions if item.name != 'request_user_input']
         effects = contract.get("allowed_effects")
         if not isinstance(effects, list):
             return [
@@ -765,20 +838,6 @@ class ExecutionEngine:
             if self._tool_state_session_key != session_key:
                 reset_state()
                 self._tool_state_session_key = session_key
-
-    def _all_non_retryable(self, results: list[ToolResult]) -> bool:
-        return all(
-            not result.success and result.error_code in self.non_retryable_error_codes
-            for result in results
-        )
-
-    def _has_failed_test_result(self, results: list[ToolResult]) -> bool:
-        definition_for = getattr(self.tools, "definition_for", lambda _name: None)
-        return any(
-            not result.success
-            and getattr(definition_for(result.name), "risk_level", "") == "test"
-            for result in results
-        )
 
     @staticmethod
     def _workspace_state(request: UserRequest) -> WorkspaceSessionState:
@@ -842,26 +901,3 @@ class ExecutionEngine:
             error_code="progress_required",
             metadata={"repeated_actions": signal.repeated_actions},
         )
-
-    def _non_retryable_failure_message(self, results: list[ToolResult]) -> str:
-        reasons = []
-        has_permission_issue = False
-        for result in results:
-            if result.error_code == "path_outside_workspace":
-                has_permission_issue = True
-                reasons.append("requested path is outside the current workspace")
-            elif result.error_code == "approval_required":
-                has_permission_issue = True
-                reasons.append(f"tool '{result.name}' requires explicit approval")
-            elif result.error_code == "approval_denied":
-                reasons.append(f"tool '{result.name}' was declined by the user")
-            elif result.error_code == "duplicate_tool_call":
-                reasons.append(f"tool '{result.name}' repeated the same action without using the previous result")
-            else:
-                reasons.append(result.output)
-        unique_reasons = list(dict.fromkeys(reasons))
-        if has_permission_issue:
-            prefix = "Cannot continue with the available tool permissions: "
-        else:
-            prefix = "Cannot continue because tool use stopped making progress: "
-        return prefix + "; ".join(unique_reasons) + "."

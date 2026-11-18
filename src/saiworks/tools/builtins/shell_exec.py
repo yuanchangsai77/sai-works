@@ -24,6 +24,7 @@ def tool() -> SimpleTool:
     return SimpleTool(
         name="shell_exec",
         tracks_effects=True,
+        uses_persistent_shell=True,
         description="Execute a shell command in the workspace and return stdout, stderr, and exit code.",
         arguments={
             "command": "Command to execute.",
@@ -45,14 +46,16 @@ def tool() -> SimpleTool:
 
 
 def run(action: ToolAction, context: ToolContext) -> ToolResult:
-    cwd = resolve_workspace_path(context, action.arguments.get("cwd", "."))
+    existing = context.state.get("shell_session")
+    reusable = (isinstance(existing, ShellSession) and not existing.closed
+                and not existing._process_owner.leader_exited() and existing.context.cwd == context.cwd)
+    same_workspace = context.state.get('shell_resume_workspace') == context.cwd
+    default_cwd = context.state.get('shell_resume_cwd', '.') if not reusable and same_workspace else '.'
+    cwd = resolve_workspace_path(context, action.arguments.get("cwd", default_cwd))
     if isinstance(cwd, ToolResult):
         return retarget(cwd, action.name)
     if error := path_error(action, cwd, "directory"):
         return error
-    existing = context.state.get("shell_session")
-    reusable = (isinstance(existing, ShellSession) and not existing.closed
-                and not existing._process_owner.leader_exited() and existing.context.cwd == context.cwd)
     cd_base = existing.cwd if reusable and "cwd" not in action.arguments else cwd.path
     if error := _shell_cd_error(action, context, cd_base):
         return error

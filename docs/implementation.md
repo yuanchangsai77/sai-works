@@ -1,12 +1,12 @@
 # SaiWorks 当前实现与目标差距
 
-核对于 2026-11-06：对照 Runtime/TaskStore、桌面应用投影、能力仓库、上下文装配和工具批次实现。本文只汇总当前事实与限制，工作状态只维护在[路线图](roadmap.md)。历次测试与环境见[证据索引](archive/README.md)，不将历史结果当作本次验收。
+核对于 2026-11-18：对照 Runtime/TaskStore、桌面应用投影、能力仓库、上下文装配和工具批次实现。本文只汇总当前事实与限制，工作状态只维护在[路线图](roadmap.md)。历次测试与环境见[证据索引](archive/README.md)，不将历史结果当作本次验收。
 
 ## 1. 当前阶段
 
 当前系统是以本地软件项目为主要场景的智能体执行框架（Agent Harness）：有模型—工具循环、会话持久化、能力按需激活、执行审批、证据与恢复机制。它已有执行内核基础，但尚不是通用的远程 Execution Platform 或 Distributed Agent Runtime。引擎内部已将模型轮次、动作处理、结果投影、轮次裁决和收尾分为独立职责；单次 Run 的计数与缓存隔离于按 Task 共享的执行上下文。按 Task 持久化取消已桥接所属活动 Run，并与新动作启动按事务排序；已经启动的工具仍登记结果后以 `interrupted` 收尾，不保证立即终止外部副作用。未确认副作用保留为恢复上下文，由模型决定核查与后续动作，核对边界见[任务控制与审批](reference/runtime-control.md)。
 
-CLI 与 TUI 共用执行引擎，TUI 通过展示适配接入。现有应用入口保留 CLI 兼容适配，另有无终端 Runtime 装配。运行、会话、压缩、命令激活和收尾已迁入 Runtime；独立任务库提供事务接受与提交去重。Runtime 实例按任务单执行槽调度，Task 的取消上下文和工具执行实例隔离；这不妨碍同一轮内受控本地读取最多四项并发，二者是不同层级。同进程任务快照与观察机制已有持久化修订、多观察者和可撤销观察资格，并区分执行结果与会话交付状态；现行接口见[任务观察](reference/runtime-observation.md)。审批记录、有效期、决定竞争与控制资格已有实现；引擎仍使用同步审批，批准消费、挂起/续跑和各界面统一接入未完成，不能由存储记录推导已有可恢复审批。跨进程同步与常驻服务仍未实现。
+CLI 与 TUI 共用执行引擎，TUI 通过展示适配接入。现有应用入口保留 CLI 兼容适配，另有无终端 Runtime 装配。运行、会话、压缩、命令激活和收尾已迁入 Runtime；独立任务库提供事务接受与提交去重。Runtime 实例按任务单执行槽调度，Task 的取消上下文和工具执行实例隔离；这不妨碍同一轮内受控本地读取最多四项并发，二者是不同层级。同进程任务快照与观察机制已有持久化修订、多观察者和可撤销观察资格，并区分执行结果与会话交付状态；现行接口见[任务观察](reference/runtime-observation.md)。审批记录、有效期、决定竞争与控制资格已有实现；审批与用户问题已接入持久化等待、批准消费、执行槽释放和原轮次续跑，同步入口仅在槽外等待最终结果；已保存等待支持新进程显式恢复。各界面已接入同步兼容回调，完整快照订阅仍未统一，见[等待机制](runtime/agent-runtime.md#等待与续跑)。跨进程同步与常驻服务仍未实现。确认本机旧所有者退出后已可回收遗留执行权，未知动作事实保留给模型，不自动重放；这不等于后台自动续跑。显式推进仍核验委派范围，准备失败保留等待与既有决定；Shell 目录按工作区重新校验，环境丢失后由模型调整未派发步骤。恢复诊断逐轮更新，普通业务失败和重复探索不提前终止推理，明确完成证据与预算仍核验，见[恢复机制](runtime/evidence-recovery.md)。
 
 桌面参考应用提供 GUI 无关的 `DesktopController`：它仅保持界面本地的当前会话与展示投影，工作区打开、会话恢复、任务提交、取消和关闭均调用 Runtime 门面。它不暴露 Engine、ToolRegistry 或 Policy，不创建第二套会话与任务存储。`desktop_presenter` 只负责语义动作名称、审批文案和 Activity 展示状态，`desktop_windows` 负责 Quick Actions、Diagnostics 和日志目录入口；二者都不持有 Runtime 权威状态。`DesktopApp` 使用内置 Tk 8.6 提供参考窗口，已接通工作区、基于 session 的任务导航、后台执行、紧凑进度卡、按需 Activity、审批、取消、结果卡、Quick Actions 与当前 run 诊断；窗口已有 Conversation/Result/Artifacts 投影、历史结果和临时流式预览，Artifacts 当前是已有引用与证据来源；尚未接入任务快照与修订订阅或完整文件/diff 查看，也未经生产打包、签名、更新与完整视觉/无障碍验收。
 
@@ -14,7 +14,7 @@ CLI 与 TUI 共用执行引擎，TUI 通过展示适配接入。现有应用入�
 
 | 目标领域 | 当前机制 | 未闭合边界 | 主要依据 |
 | --- | --- | --- | --- |
-| Agent Runtime | 模型—工具循环、运行预算、完成门禁、本地子代理和取消入口 | 统一任务管理门面、常驻 worker、跨进程故障续跑与长期调度 | orchestration/engine.py、control.py、subagent_runner.py |
+| Agent Runtime | 模型—工具循环、运行预算、完成门禁、本地子代理和取消入口 | 统一任务管理门面、常驻 worker、完整跨进程故障续跑与长期调度 | orchestration/engine.py、control.py、subagent_runner.py |
 | Execution Runtime | 工具注册、参数与安全预检、隔离本地读取批次、有序观察合并、Shell 与 MCP 适配 | 通用 Execution Target、远程租约、统一副作用恢复和资源隔离 | tools/registry.py、schema_validation.py、mcp/adapter.py |
 | Capability | 能力仓库、本地有界目录快照、打开、按需激活与释放、scope 和预算 | 完整资源包生命周期、能力与目标绑定及资源上下文整合 | capabilities/warehouse.py、local_source.py、mcp_source.py |
 | Workspace | 工作目录、会话初始根与活动根、批准路径、项目上下文与 Shell 状态 | 独立资源环境对象、远程资源与秘密引用生命周期 | types.py、context/workspace.py、tools/builtins/workspace_open.py |
@@ -28,10 +28,10 @@ CLI 与 TUI 共用执行引擎，TUI 通过展示适配接入。现有应用入�
 | 交互职责 | 现状 | 差距 |
 | --- | --- | --- |
 | 提交与控制运行 | Runtime 统一执行协调、Task 接受与提交查询，CLI 保留输入 | 跨进程控制，以及各界面对已有同进程 revision 快照的统一消费 |
-| 桌面应用控制 | DesktopController 复用 Runtime；Tk 参考窗口已接通主链路 | 生产打包/视觉/无障碍、可恢复审批、跨界面切换与脱离界面续跑 |
+| 桌面应用控制 | DesktopController 复用 Runtime；Tk 参考窗口已接通主链路 | 生产打包/视觉/无障碍、完整快照订阅、跨界面切换与脱离界面自动续跑 |
 | 会话与恢复 | SessionCoordinator 协调存储、恢复和压缩；界面选择会话 | 跨任务 lineage 与独立恢复接口 |
 | 事件与观察 | ProgressReporter、日志事件、TUI 事件队列 | 多界面统一订阅、重连与事件位置语义尚未建立 |
-| 授权交互 | Runtime/引擎消费同步审批适配 | 已确认的审批等待、续跑与批准消费尚未接入；新增具体契约仍须先核对 |
+| 授权交互 | Runtime 持久化等待、消费批准并续跑；界面兼容回调在槽外收集决定 | 跨界面完整接管、远程控制资格和常驻运行生命周期 |
 | 工作空间与能力 | 工作空间状态、能力仓库及命令入口 | 统一面向界面的查询与管理边界 |
 | 历史与证据 | 会话 trace、检查点、工具结果和运行日志 | 跨端一致查询、保留策略与访问约束 |
 

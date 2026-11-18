@@ -332,7 +332,7 @@ def test_completion_gate_rejects_protocol_placeholder_then_accepts_replacement(t
     assert [item.success for item in summary.tool_results if item.name == "completion_gate"] == [False, True]
 
 
-def test_completion_gate_requires_workspace_change_for_change_request(tmp_path):
+def test_completion_gate_requires_explicit_workspace_change(tmp_path):
     class PrematureThenRepairingModel:
         calls = 0
 
@@ -365,7 +365,7 @@ def test_completion_gate_requires_workspace_change_for_change_request(tmp_path):
         UserRequest(
             prompt="create note.md",
             cwd=str(tmp_path),
-            metadata={"requires_file_changes": True},
+            metadata={"requires_file_changes": True, "completion_requirements": ["workspace_change"]},
         )
     )
 
@@ -438,7 +438,7 @@ def test_completion_gate_checks_evidence_after_done_reply_actions(tmp_path):
             UserRequest(
                 prompt="create note.md",
                 cwd=str(tmp_path),
-                metadata={"requires_file_changes": True},
+                metadata={"requires_file_changes": True, "completion_requirements": ["workspace_change"]},
             )
         )
 
@@ -462,15 +462,16 @@ def test_prior_completion_rejection_does_not_hide_missing_evidence(tmp_path):
         tools=build_builtin_registry(logger),
         guardrails=Guardrails(policy=DefaultPolicy(mode="auto"), logger=logger),
         logger=logger,
+        max_turns=4,
         ).execute(
             UserRequest(
                 prompt="create note.md",
                 cwd=str(tmp_path),
-                metadata={"requires_file_changes": True},
+                metadata={"requires_file_changes": True, "completion_requirements": ["workspace_change"]},
             )
         )
 
-    assert summary.outcome == "stalled"
+    assert summary.outcome == "exhausted"
     assert summary.checkpoint.unmet_deliverables == ["workspace_change"]
     assert not (tmp_path / "note.md").exists()
 
@@ -739,7 +740,7 @@ def test_artifact_reference_requires_explicit_delivery_evidence(tmp_path):
     assert any(item.kind == "artifact" for item in session.checkpoint.evidence)
 
 
-def test_no_change_completion_requires_current_read_evidence(tmp_path):
+def test_no_change_phrase_cannot_waive_explicit_evidence(tmp_path):
     logger = InMemoryLogger()
     engine = ExecutionEngine(
         model=object(),
@@ -756,7 +757,7 @@ def test_no_change_completion_requires_current_read_evidence(tmp_path):
 
     session.add_tool_result(ToolResult("reader", True, "observed", metadata={"evidence": ["read"]}))
 
-    assert engine._completion_problem(message, session) == ""
+    assert engine._completion_problem(message, session)
 
 
 def test_session_history_replaces_large_action_arguments_with_digest(tmp_path):
@@ -1204,7 +1205,7 @@ def test_newly_activated_tool_cannot_run_in_same_model_turn(tmp_path):
     assert summary.tool_results[1].error_code == "tool_not_visible_this_turn"
 
 
-def test_engine_stops_repeated_non_retryable_tool_failures(tmp_path):
+def test_engine_keeps_reasoning_after_repeated_denials_until_budget(tmp_path):
     class RepeatingBlockedModel:
         calls = 0
 
@@ -1223,16 +1224,17 @@ def test_engine_stops_repeated_non_retryable_tool_failures(tmp_path):
         tools=build_builtin_registry(logger),
         guardrails=Guardrails(policy=DefaultPolicy(), logger=logger),
         logger=logger,
+        max_turns=4,
     )
 
     summary = engine.execute(UserRequest(prompt="run pwd", cwd=str(tmp_path)))
 
-    assert model.calls == 2
-    assert "requires explicit approval" in summary.final_message
-    assert summary.outcome == "blocked"
-    assert summary.checkpoint.phase == "blocked"
-    assert summary.tool_results[-1].error_code == "approval_required"
-    assert [event.name for event in logger.events].count("tool.result") == 2
+    assert model.calls == 4
+    assert "maximum number of turns" in summary.final_message
+    assert summary.outcome == "exhausted"
+    assert summary.checkpoint.phase == "in_progress"
+    assert summary.tool_results[0].error_code == "approval_required"
+    assert [event.name for event in logger.events].count("tool.result") == 4
 
 
 def test_done_turn_cannot_hide_blocked_action_behind_later_success(tmp_path):
@@ -1449,14 +1451,15 @@ def test_engine_blocks_patch_in_readonly_mode_without_prompting(tmp_path):
         tools=build_builtin_registry(logger),
         guardrails=Guardrails(policy=DefaultPolicy(mode="readonly"), logger=logger),
         logger=logger,
+        max_turns=4,
         approval_callback=lambda action, _reason: approvals.append(action.name) or True,
     )
 
     summary = engine.execute(UserRequest(prompt="write file", cwd=str(tmp_path)))
 
-    assert model.calls == 2
+    assert model.calls == 4
     assert approvals == []
-    assert summary.tool_results[-1].error_code == "blocked_by_policy"
+    assert summary.tool_results[0].error_code == "blocked_by_policy"
     assert not (tmp_path / "blocked.py").exists()
 
 
@@ -1630,7 +1633,7 @@ def test_engine_allows_model_to_fix_after_failed_tests(tmp_path):
     assert (tmp_path / "fixed.py").exists()
 
 
-def test_engine_stops_after_repeated_failed_test_runs(tmp_path):
+def test_engine_failed_tests_stop_only_at_explicit_budget(tmp_path):
     class FailingTestsModel:
         def respond(self, _session):
             return ModelReply(
@@ -1645,13 +1648,70 @@ def test_engine_stops_after_repeated_failed_test_runs(tmp_path):
         tools=build_builtin_registry(logger),
         guardrails=Guardrails(policy=DefaultPolicy(mode="auto"), logger=logger),
         logger=logger,
+        max_turns=5,
         approval_callback=lambda _action, _reason: True,
     )
 
     summary = engine.execute(UserRequest(prompt="test loop", cwd=str(tmp_path)))
 
-    assert "Stopping after 3 consecutive failing test runs" in summary.final_message
-    assert [result.name for result in summary.tool_results] == ["run_tests", "run_tests", "run_tests"]
+    assert summary.outcome == "exhausted"
+    assert [result.name for result in summary.tool_results] == ["run_tests"] * 5
+
+
+def test_model_can_repair_after_four_real_test_failures(tmp_path):
+    class RepairingModel:
+        calls = 0
+
+        def respond(self, session):
+            self.calls += 1
+            if self.calls <= 5:
+                # Distinct invocations exercise actual execution, not duplicate cache reuse.
+                command = 'false' if self.calls <= 4 else 'true'
+                return ModelReply('verify', actions=[ToolAction('run_tests', {
+                    'command': f'printf attempt{self.calls}; {command}',
+                })])
+            assert 'test' in {record.kind for record in session.checkpoint.evidence}
+            return ModelReply('The final verification passed.', done=True)
+
+    logger = InMemoryLogger()
+    model = RepairingModel()
+    engine = ExecutionEngine(model, build_builtin_registry(logger),
+                             Guardrails(DefaultPolicy(mode='auto'), logger), logger,
+                             approval_callback=lambda *_: True)
+    summary = engine.execute(UserRequest('verify', str(tmp_path), {'completion_requirements': ['test']}))
+    assert model.calls == 6
+    assert [result.success for result in summary.tool_results] == [False] * 4 + [True]
+    assert summary.outcome == 'completed'
+
+
+def test_modification_intent_does_not_require_a_write_or_magic_no_change_phrase(tmp_path):
+    class Model:
+        def respond(self, _session):
+            return ModelReply('The requested operation requires a decision about the target environment.', done=True)
+
+    logger = InMemoryLogger()
+    summary = ExecutionEngine(Model(), build_builtin_registry(logger),
+                              Guardrails(DefaultPolicy(mode='auto'), logger), logger).execute(
+        UserRequest('update the configuration', str(tmp_path), {'requires_file_changes': True}))
+    assert summary.checkpoint.required_evidence == []
+    assert not any(result.name == 'completion_gate' for result in summary.tool_results)
+
+
+def test_repeated_invalid_completions_can_be_corrected_before_budget(tmp_path):
+    class Model:
+        calls = 0
+
+        def respond(self, _session):
+            self.calls += 1
+            return ModelReply('object' if self.calls <= 3 else 'Inspection complete.', done=True)
+
+    logger = InMemoryLogger()
+    model = Model()
+    summary = ExecutionEngine(model, build_builtin_registry(logger),
+                              Guardrails(DefaultPolicy(mode='auto'), logger), logger,
+                              max_turns=5).execute(UserRequest('inspect', str(tmp_path)))
+    assert model.calls == 4
+    assert summary.outcome == 'completed'
 
 
 def test_engine_keeps_read_state_within_single_execute(tmp_path):
@@ -2345,7 +2405,7 @@ def test_engine_skips_duplicate_successful_tool_action(tmp_path):
     assert logged_results[1].payload["metadata"]["duplicate"] is True
 
 
-def test_engine_stops_repeated_duplicate_tool_actions(tmp_path):
+def test_engine_duplicate_effects_do_not_end_reasoning(tmp_path):
     class RepeatingDuplicateModel:
         calls = 0
 
@@ -2365,20 +2425,22 @@ def test_engine_stops_repeated_duplicate_tool_actions(tmp_path):
         tools=build_builtin_registry(logger),
         guardrails=Guardrails(policy=DefaultPolicy(), logger=logger),
         logger=logger,
+        max_turns=7,
         approval_callback=lambda action, _reason: approvals.append(action.name) or True,
     )
 
     summary = engine.execute(UserRequest(prompt="write marker", cwd=str(tmp_path)))
 
-    assert model.calls == 6
+    assert model.calls == 7
     assert approvals == ["shell_exec"]
-    assert "repeated the same action" in summary.final_message
+    assert summary.outcome == "exhausted"
     assert (tmp_path / "marker.txt").read_text(encoding="utf-8") == "x"
     assert [result.error_code for result in summary.tool_results] == [
         None,
         None,
         None,
         None,
+        "duplicate_tool_call",
         "duplicate_tool_call",
         "duplicate_tool_call",
     ]
@@ -2683,16 +2745,17 @@ def test_engine_skips_duplicate_non_retryable_failures(tmp_path):
         tools=build_builtin_registry(logger),
         guardrails=Guardrails(policy=DefaultPolicy(mode="auto"), logger=logger),
         logger=logger,
+        max_turns=4,
     )
 
     summary = engine.execute(UserRequest(prompt="read missing", cwd=str(tmp_path)))
 
-    assert model.calls == 2
+    assert model.calls == 4
     assert summary.tool_results[0].error_code == "path_not_found"
     assert summary.tool_results[1].metadata["duplicate"] is True
-    assert "repeated the same action" in summary.final_message
+    assert summary.outcome == "exhausted"
     logged_results = [event for event in logger.events if event.name == "tool.result"]
-    assert len(logged_results) == 2
+    assert len(logged_results) == 4
     assert logged_results[1].payload["error_code"] == "duplicate_tool_call"
 
 

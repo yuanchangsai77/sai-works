@@ -12,7 +12,7 @@
 
 使用独立 SQLite 文件保存任务记录，以事务和 submission_id 唯一约束完成身份、绑定上下文与去重记录的原子接受。submission_id 在单用户 Runtime 存储范围内唯一；记录首版不自动清理。相同 id、相同指纹返回原任务；相同 id、不同指纹以内部 ValueError 拒绝，不新增跨方错误码。Accepted 后才能排队执行。
 
-当前使用 queued、running、cancelled、finished；waiting_approval 仍是可恢复审批设计目标，尚未接入当前接受状态。它们为运行管理层内部状态，不替代 TaskCheckpoint.phase 或 Run outcome。已有审批记录及控制资格以[运行控制参考](runtime-control.md)为准，不能据此推导接受状态已支持挂起/续跑。当前实现仅提供接受、排队、运行与结果关联记录，不授权自动恢复、外部动作重放或网络协议。
+当前接受状态还包括 waiting_approval 与 waiting_user，两者均为非终态等待，保存等待时不产生 ExecutionSummary。状态、回复资格和显式续跑以[运行控制参考](runtime-control.md)为准；它们不替代 TaskCheckpoint.phase 或 Run outcome，也不授权自动重放外部动作。
 
 ## 故障与回退
 

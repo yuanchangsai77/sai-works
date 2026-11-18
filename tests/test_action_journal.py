@@ -131,7 +131,7 @@ def test_started_action_keeps_redacted_reconciliation_facts_across_v4_upgrade(tm
     assert "supersecret" not in str(unknown)
     assert "[REDACTED]" in str(unknown)
     with sqlite3.connect(path) as connection:
-        assert connection.execute("PRAGMA user_version").fetchone()[0] == 8
+        assert connection.execute("PRAGMA user_version").fetchone()[0] == 9
 
 
 def test_admission_log_failure_leaves_durable_reconciliation_summary(tmp_path, monkeypatch):
@@ -417,7 +417,8 @@ def test_pending_effect_informs_model_without_blocking_approval_or_completion(tm
 
     class Model:
         def respond(self, session):
-            prompts.append(session.request.prompt)
+            prompts.append(session.recovery_facts)
+            assert session.request.prompt == "continue"
             return ModelReply('All done', done=True, actions=[] if summarize else [ToolAction('effect', {})])
 
     logger = InMemoryLogger(base_dir=str(tmp_path / 'runs'))
@@ -485,3 +486,48 @@ def test_recovery_summary_keeps_latest_errors_and_discloses_omissions(tmp_path):
     assert ids[0] not in facts
     assert all(action_id in facts for action_id in ids[1:])
     assert '1 older current records omitted' in facts
+
+
+def test_runtime_refreshes_recovery_facts_after_success_and_next_failure(tmp_path):
+    from saiworks.model.prompt import ModelPromptBuilder
+
+    logger = InMemoryLogger(base_dir=str(tmp_path / 'runs'))
+    store = TaskStore(tmp_path / 'tasks.sqlite3')
+    store.accept(UserRequest('work', str(tmp_path)), submission_id='old', task_id='task')
+    assert store.claim('old')
+    old_ids = []
+    for _ in range(3):
+        action_id = store.start_action('task', 'old', 'effect', {}, str(tmp_path), 'execute')
+        store.finish_action(action_id, success=False, error_code='timeout')
+        old_ids.append(action_id)
+    store.finish('old', ExecutionSummary('interrupted', [], outcome='runtime_error'))
+    snapshots, requests, outputs = [], [], []
+
+    def effect(action, _context):
+        success = action.arguments['attempt'] == 1
+        outputs.append(success)
+        return ToolResult('effect', success, 'ok' if success else 'timed out', None if success else 'timeout')
+
+    class Model:
+        def respond(self, session):
+            assert session.request.prompt == 'continue'
+            snapshots.append(session.recovery_facts)
+            requests.append(str(ModelPromptBuilder().build_messages(session)))
+            if len(snapshots) <= 2:
+                return ModelReply('continue', actions=[ToolAction('effect', {'attempt': len(snapshots)})])
+            return ModelReply('The latest attempt timed out; its external outcome remains unknown.', done=True)
+
+    tools = ToolRegistry(logger)
+    tools.register(SimpleTool('effect', 'effect', {'attempt': 'attempt'}, effect, risk_level='execute'))
+    engine = ExecutionEngine(Model(), tools, Guardrails(DefaultPolicy(mode='confirm'), logger), logger,
+                             approval_callback=lambda *_: True)
+    runtime = Runtime(engine, logger=logger, task_store=store)
+    runtime.execute(UserRequest('continue', str(tmp_path), {'task_id': 'task'}), submission_id='new')
+
+    assert outputs == [True, False]
+    assert all(action_id in snapshots[0] for action_id in old_ids)
+    assert snapshots[1] == ''
+    assert all(action_id not in snapshots[2] for action_id in old_ids)
+    assert snapshots[2].count('error receipt recorded') == 1
+    assert all(action_id not in requests[1] for action_id in old_ids)
+    assert len(store.unknown_actions('task')) == 4  # Historical facts remain available.

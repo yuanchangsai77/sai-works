@@ -79,23 +79,9 @@ class CompletionPolicy:
     invalid_placeholders = frozenset(
         {"dictionary", "dict", "object", "array", "string", "null", "undefined", "none"}
     )
-    no_change_phrases = frozenset(
-        {
-            "no change is needed",
-            "no changes are needed",
-            "already exists",
-            "already satisfied",
-            "无需修改",
-            "不需要修改",
-            "已经满足",
-            "已存在",
-        }
-    )
 
     def required_evidence(self, request: UserRequest, request_intent) -> list[str]:
         required: list[str] = []
-        if request_intent.file_changes:
-            required.append("workspace_change")
         explicit = request.metadata.get("completion_requirements", [])
         if isinstance(explicit, list):
             required.extend(item for item in explicit if isinstance(item, str) and item)
@@ -143,28 +129,8 @@ class CompletionPolicy:
         if unresolved:
             return ""
         unmet = list(session.checkpoint.unmet_deliverables)
-        if (
-            unmet == ["workspace_change"]
-            and self.explains_no_change(message)
-            and self._has_current_evidence(session, "read")
-        ):
-            session.checkpoint.unmet_deliverables = []
-            return ""
         return (
             "Model completion was rejected because runtime evidence is still missing: "
-            f"{', '.join(unmet)}. Complete the deliverable or explain why no change is required."
-        )
-
-    def explains_no_change(self, message: str) -> bool:
-        normalized = " ".join(message.casefold().split())
-        return any(phrase in normalized for phrase in self.no_change_phrases)
-
-    @staticmethod
-    def _has_current_evidence(session: SessionContext, kind: str) -> bool:
-        checkpoint = session.checkpoint
-        return any(
-            record.kind == kind
-            and record.task_id == checkpoint.task_id
-            and record.workspace_revision == checkpoint.workspace_revision
-            for record in checkpoint.evidence
+            f"{', '.join(unmet)}. These are explicit completion requirements. "
+            "Use the available facts to decide next steps; wording alone cannot waive the required evidence."
         )

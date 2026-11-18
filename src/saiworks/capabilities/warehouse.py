@@ -339,6 +339,9 @@ class CapabilityWarehouse:
             if record.scope == "session"
         ]
 
+    def activation_scopes(self) -> dict[str, str]:
+        return {identity: record.scope for identity, record in self._active.items()}
+
     def restore_capabilities(self, capability_ids: Iterable[str]) -> None:
         for capability_id in capability_ids:
             if capability_id in self._active:

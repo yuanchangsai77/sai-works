@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import time
 from threading import Event, Lock
 
 
@@ -54,6 +55,31 @@ class DesktopApprovalRequest:
         return self._decision is True
 
 
+class DesktopUserInputRequest:
+    """A cancellable UI rendezvous; Runtime remains the reply authority."""
+
+    def __init__(self, question, options):
+        self.question, self.options = question, options
+        self._completed, self._lock = Event(), Lock()
+        self._answer = None
+
+    @property
+    def is_resolved(self):
+        return self._completed.is_set()
+
+    def resolve(self, answer):
+        with self._lock:
+            if self._completed.is_set():
+                return False
+            self._answer = answer if isinstance(answer, str) and answer.strip() else None
+            self._completed.set()
+            return True
+
+    def wait(self):
+        self._completed.wait()
+        return self._answer
+
+
 @dataclass(frozen=True, slots=True)
 class ActivityStep:
     state: str
@@ -66,6 +92,7 @@ class DesktopActivityModel:
     def __init__(self) -> None:
         self._steps: list[ActivityStep] = []
         self.headline = "SaiWorks is ready"
+        self._updated_at = time.monotonic()
 
     @property
     def steps(self) -> tuple[ActivityStep, ...]:
@@ -74,6 +101,7 @@ class DesktopActivityModel:
     def start(self, label: str = "Understanding your request") -> None:
         self._steps = [ActivityStep("current", label)]
         self.headline = f"●  {label}"
+        self._updated_at = time.monotonic()
 
     def update(self, label: str) -> None:
         label = label.rstrip("…")
@@ -85,6 +113,13 @@ class DesktopActivityModel:
         else:
             self._steps.append(ActivityStep("current", label))
         self.headline = f"●  {label}"
+        self._updated_at = time.monotonic()
+
+    def waiting_headline(self) -> str:
+        if not self._steps or self._steps[-1].state != "current":
+            return self.headline
+        elapsed = max(0, int(time.monotonic() - self._updated_at))
+        return f"{self.headline} · {elapsed}s since last status update"
 
     def finish(self, outcome: str) -> str:
         state, label, symbol = {

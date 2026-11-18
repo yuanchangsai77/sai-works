@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+import types
 from contextlib import closing
 from dataclasses import asdict, dataclass, is_dataclass
 from datetime import datetime, timedelta, timezone
@@ -14,6 +15,7 @@ from ..capabilities.model import InstructionContent
 from ..safety.redaction import redact
 from .file_recovery import describe_creation, observe
 from .process_owner import current_owner, owner_stopped
+from .interactions import InteractionStore, PendingInteraction
 from ..types import ExecutionSummary, SessionResumeState, SessionRunTrace, UserRequest, WorkspaceSessionState
 
 
@@ -37,6 +39,10 @@ def _restore(annotation, value):
         return annotation(**{key: _restore(hints[key], item) for key, item in value.items() if key in hints})
     origin = get_origin(annotation)
     args = get_args(annotation)
+    if origin is types.UnionType:
+        candidates = [item for item in args if item is not type(None)]
+        if len(candidates) == 1:
+            return _restore(candidates[0], value)
     if origin is list and isinstance(value, list):
         return [_restore(args[0], item) for item in value]
     if origin is dict and isinstance(value, dict):
@@ -77,6 +83,7 @@ class TaskSnapshot:
     state: str
     current_submission_id: str
     submissions: tuple[TaskRecord, ...]
+    pending_interactions: tuple[PendingInteraction, ...] = ()
 
 
 APPROVAL_STATES = frozenset({"pending", "approved", "denied", "expired", "cancelled", "consumed"})
@@ -126,11 +133,11 @@ def fingerprint_action(
     return hashlib.sha256(canonical.encode()).hexdigest()
 
 
-class TaskStore:
+class TaskStore(InteractionStore):
     """Atomic acceptance and attempt ownership, independent of legacy session JSON.
 
-    Unfinished claims are never reclaimed automatically after a process restart.
-    Their execution facts are retained for model-directed recovery.
+    Claims are reclaimed only after verifying that the local owner has stopped.
+    Execution facts remain independent and are retained for model-directed recovery.
     """
 
     def __init__(self, path: str | Path):
@@ -138,7 +145,7 @@ class TaskStore:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with closing(self._connect()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
-            if connection.execute("PRAGMA user_version").fetchone()[0] not in (0, 1, 2, 3, 4, 5, 6, 7, 8):
+            if connection.execute("PRAGMA user_version").fetchone()[0] not in (0, 1, 2, 3, 4, 5, 6, 7, 8, 9):
                 raise ValueError("Unsupported task database version")
             connection.execute("""CREATE TABLE IF NOT EXISTS tasks (
                 submission_id TEXT PRIMARY KEY, task_id TEXT NOT NULL,
@@ -195,7 +202,8 @@ class TaskStore:
             connection.execute("CREATE TABLE IF NOT EXISTS submission_owners (submission_id TEXT PRIMARY KEY, identity TEXT NOT NULL)")
             connection.execute("""CREATE TABLE IF NOT EXISTS submission_recoveries (
                 submission_id TEXT PRIMARY KEY, recovered_at TEXT NOT NULL, evidence TEXT NOT NULL)""")
-            connection.execute("PRAGMA user_version=8")
+            self.create_interaction_schema(connection)
+            connection.execute("PRAGMA user_version=9")
 
     def _connect(self):
         connection = sqlite3.connect(self.path, timeout=30)
@@ -229,8 +237,11 @@ class TaskStore:
             records = tuple(self._record(row) for row in connection.execute(
                 "SELECT * FROM tasks WHERE task_id=? ORDER BY rowid", (task_id,)))
             current = next((record for record in records if record.state == "running"), None)
+            current = current or next((record for record in records if record.state.startswith('waiting_')), None)
             current = current or next((record for record in records if record.state == "queued"), records[-1])
-            return TaskSnapshot(task_id, revision[0], current.state, current.submission_id, records)
+            interactions = tuple(self.interaction_view(row) for row in connection.execute(
+                "SELECT * FROM task_interactions WHERE task_id=? AND state='pending' ORDER BY rowid", (task_id,)))
+            return TaskSnapshot(task_id, revision[0], current.state, current.submission_id, records, interactions)
 
     def set_delivery_state(self, submission_id: str, state: str) -> None:
         if state not in ("pending", "completed"):
@@ -265,7 +276,7 @@ class TaskStore:
                 record = self._record(existing)
             else:
                 if task_id:
-                    self._recover_unstarted(connection, task_id)
+                    self._recover_stopped(connection, task_id)
                 if task_id and connection.execute("SELECT 1 FROM tasks WHERE task_id=? AND state='running'", (task_id,)).fetchone():
                     raise RuntimeError("Task has an unfinished attempt requiring explicit recovery")
                 connection.execute("""INSERT INTO tasks
@@ -283,8 +294,11 @@ class TaskStore:
     def claim(self, submission_id: str) -> bool:
         with closing(self._connect()) as connection, connection:
             connection.execute("BEGIN IMMEDIATE")
-            changed = connection.execute("""UPDATE tasks SET state='running'
-                WHERE submission_id=? AND state='queued' AND NOT EXISTS (
+            row = connection.execute('SELECT * FROM tasks WHERE submission_id=?', (submission_id,)).fetchone()
+            if row is None or not self._can_advance(connection, row):
+                return False
+            changed = connection.execute("""UPDATE tasks SET state='running', error=NULL
+                WHERE submission_id=? AND state IN ('queued','waiting_approval','waiting_user') AND NOT EXISTS (
                     SELECT 1 FROM tasks AS active WHERE active.task_id=tasks.task_id
                     AND active.state='running')""", (submission_id,)).rowcount == 1
             if changed:
@@ -296,16 +310,15 @@ class TaskStore:
             return changed
 
     @staticmethod
-    def _recover_unstarted(connection, task_id):
+    def _recover_stopped(connection, task_id):
         rows = connection.execute("""SELECT tasks.submission_id, submission_owners.identity FROM tasks
             JOIN submission_owners USING(submission_id) WHERE task_id=? AND state='running'""", (task_id,)).fetchall()
         for row in rows:
             owner = json.loads(row["identity"])
             if not owner_stopped(owner):
                 continue
-            if connection.execute("SELECT 1 FROM action_attempts WHERE submission_id=? LIMIT 1", (row["submission_id"],)).fetchone():
-                continue
-            evidence = {"owner": owner, "owner_stopped": True, "effectful_actions_admitted": False}
+            admitted = connection.execute("SELECT 1 FROM action_attempts WHERE submission_id=? LIMIT 1", (row["submission_id"],)).fetchone() is not None
+            evidence = {"owner": owner, "owner_stopped": True, "effectful_actions_admitted": admitted}
             connection.execute("UPDATE tasks SET state='finished', error='RuntimeError' WHERE submission_id=? AND state='running'", (row["submission_id"],))
             connection.execute("INSERT INTO submission_recoveries VALUES (?, ?, ?)",
                                (row["submission_id"], _utcnow().isoformat(), _json(evidence)))
@@ -320,6 +333,8 @@ class TaskStore:
                 (state, encoded, error, _json([run_id] if run_id else []), submission_id)).rowcount
             if changed != 1:
                 raise RuntimeError("Task attempt is not running")
+            connection.execute("UPDATE task_interactions SET state='closed' WHERE submission_id=? AND state='pending'", (submission_id,))
+            connection.execute('DELETE FROM run_continuations WHERE submission_id=?', (submission_id,))
             task_id = connection.execute("SELECT task_id FROM tasks WHERE submission_id=?", (submission_id,)).fetchone()[0]
             self._bump(connection, task_id)
 
@@ -422,6 +437,10 @@ class TaskStore:
             ).rowcount
             if changed != 1:
                 raise RuntimeError("Approval is no longer pending")
+            connection.execute("UPDATE task_interactions SET state='resolved' WHERE interaction_id=?", (approval_id,))
+            connection.execute("""UPDATE tasks SET state='queued' WHERE submission_id=? AND state='waiting_approval'
+                AND EXISTS (SELECT 1 FROM run_continuations WHERE submission_id=tasks.submission_id AND interaction_id=?)""",
+                (record.submission_id, approval_id))
             self._bump(connection, record.task_id)
             return self._fresh_approval(connection, approval_id)
 
@@ -443,6 +462,7 @@ class TaskStore:
             accepted_at = moment.isoformat()
             connection.execute("INSERT INTO task_cancellations (task_id, accepted_at) VALUES (?, ?)", (task_id, accepted_at))
             connection.execute("UPDATE approvals SET state='cancelled' WHERE task_id=? AND state='pending'", (task_id,))
+            connection.execute("UPDATE task_interactions SET state='cancelled' WHERE task_id=? AND state='pending'", (task_id,))
             self._bump(connection, task_id)
             return accepted_at
 
@@ -452,7 +472,7 @@ class TaskStore:
             return row[0] if row is not None else None
 
     def start_action(self, task_id: str, submission_id: str, action_name: str,
-                     arguments: dict, workspace_root: str, risk_level: str) -> str | None:
+                     arguments: dict, workspace_root: str, risk_level: str, *, approval_id=None) -> str | None:
         """Durably admit an action in the same transaction order as cancellation."""
         workspace = str(Path(workspace_root).resolve())
         with closing(self._connect()) as connection, connection:
@@ -469,6 +489,9 @@ class TaskStore:
                 raise KeyboardInterrupt
             if risk_level == "read":
                 return None
+            if approval_id is not None:
+                self.consume_approval(approval_id, task_id, submission_id, action_name, arguments,
+                                      workspace, risk_level, connection=connection)
             identity_arguments = dict(arguments)
             if action_name in {"shell_exec", "run_tests"}:
                 identity_arguments.pop("timeout", None)
@@ -486,6 +509,9 @@ class TaskStore:
                  workspace, risk_level, _json(redact(dict(arguments))),
                  _json(descriptor) if descriptor is not None else None, _utcnow().isoformat()),
             )
+            if approval_id is not None:
+                connection.execute('INSERT INTO action_evidence VALUES (?, ?, ?, ?, ?, ?)',
+                    (uuid4().hex, action_id, 'approval', 'runtime', _utcnow().isoformat(), _json({'approval_id': approval_id})))
             return action_id
 
     def finish_action(self, action_id: str, *, success: bool, error_code: str | None, known_not_started: bool = False) -> None:
@@ -511,6 +537,11 @@ class TaskStore:
                 connection.execute("INSERT INTO action_evidence VALUES (?, ?, ?, ?, ?, ?)",
                     (uuid4().hex, action_id, "execution_phase", "runtime", _utcnow().isoformat(),
                      _json({"phase": "not_started", "source": "trusted_tool_tracker"})))
+                for evidence in connection.execute(
+                    "SELECT evidence FROM action_evidence WHERE action_id=? AND kind='approval'", (action_id,),
+                ).fetchall():
+                    approval_id = json.loads(evidence[0])['approval_id']
+                    connection.execute("UPDATE approvals SET state='approved' WHERE approval_id=? AND state='consumed'", (approval_id,))
 
     def unknown_actions(self, task_id: str) -> tuple[dict[str, Any], ...]:
         """Expose durable, redacted action facts for explicit recovery."""

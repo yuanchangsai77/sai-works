@@ -116,3 +116,69 @@ def test_create_app_registers_context_loaders(tmp_path, monkeypatch):
         "WorkspaceSummaryLoader",
         "ExplicitContextLoader",
     ]
+
+
+def test_file_access_refreshes_scoped_rules_without_importing_unauthorized_paths(tmp_path):
+    from saiworks.orchestration.engine import ExecutionEngine
+    from saiworks.safety.guardrails import Guardrails
+    from saiworks.safety.policy import DefaultPolicy
+    from saiworks.tools.builtin_provider import build_builtin_registry
+    from saiworks.types import ModelReply, ToolAction
+
+    root = tmp_path / 'repo'
+    root.mkdir()
+    (root / '.git').mkdir()
+    (root / 'AGENTS.md').write_text('ROOT RULE')
+    nested = root / 'modules' / 'payment'
+    nested.mkdir(parents=True)
+    (root / 'modules' / 'AGENTS.md').write_text('MODULE RULE')
+    (nested / 'AGENTS.md').write_text('PAYMENT RULE')
+    (nested / 'service.py').write_text('ready')
+    sibling = root / 'unvisited'
+    sibling.mkdir()
+    (sibling / 'AGENTS.md').write_text('UNVISITED RULE')
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+    (outside / 'AGENTS.md').write_text('OUTSIDE RULE')
+    (outside / 'service.py').write_text('outside')
+
+    class Model:
+        turns = 0
+
+        def respond(self, session):
+            self.turns += 1
+            system = str(ModelPromptBuilder().build_messages(session)[0]['content'])
+            assert 'ROOT RULE' in system
+            assert 'OUTSIDE RULE' not in system
+            assert 'UNVISITED RULE' not in system
+            if self.turns == 1:
+                assert 'PAYMENT RULE' not in system
+                return ModelReply('inspect', actions=[ToolAction('read_file', {'path': 'modules/payment/service.py'})])
+            assert 'MODULE RULE' in system
+            assert ('PAYMENT RULE' if self.turns == 2 else 'UPDATED RULE') in system
+            assert "directory subtree" in system
+            if self.turns == 2:
+                (nested / 'AGENTS.md').write_text('UPDATED RULE')
+                return ModelReply('inspect outside', actions=[ToolAction('read_file', {'path': str(outside / 'service.py')})])
+            return ModelReply('Inspection complete.', done=True)
+
+    logger = InMemoryLogger()
+    engine = ExecutionEngine(Model(), build_builtin_registry(logger),
+                             Guardrails(DefaultPolicy(mode='auto'), logger), logger,
+                             context_loaders=[ProjectRulesLoader()], approval_callback=lambda *_: False)
+    summary = engine.execute(UserRequest('inspect', str(root)))
+    assert summary.tool_results[0].success
+    assert summary.tool_results[1].error_code == 'approval_denied'
+
+
+def test_rule_refresh_preserves_project_ancestors_when_cwd_is_nested(tmp_path):
+    root = tmp_path / 'repo'
+    cwd = root / 'nested'
+    cwd.mkdir(parents=True)
+    (root / '.git').mkdir()
+    (root / 'AGENTS.md').write_text('ROOT RULE')
+    session = SessionContext(request=UserRequest('inspect', str(cwd)))
+    loader = ProjectRulesLoader()
+    loader.load_context(session.request, session)
+    loader.refresh_observed_paths(session.request, session)
+    assert [rule.content for rule in session.project_rules] == ['ROOT RULE']

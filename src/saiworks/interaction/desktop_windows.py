@@ -36,6 +36,39 @@ class ApprovalDialog:
         self.on_decision(bool(approved))
 
 
+class UserInputDialog(ApprovalDialog):
+    def close(self, answer=None):
+        if self.closed:
+            return
+        self.closed = True
+        try:
+            self.window.destroy()
+        except Exception:
+            pass
+        self.on_decision(answer if isinstance(answer, str) else None)
+
+
+def show_user_input_dialog(root, tk, ttk, question, options, on_answer):
+    window = tk.Toplevel(root)
+    dialog = UserInputDialog(window, on_answer)
+    window.title('SaiWorks needs your decision')
+    window.transient(root)
+    window.columnconfigure(0, weight=1)
+    ttk.Label(window, text=question, wraplength=520).grid(row=0, column=0, padx=20, pady=20, sticky='ew')
+    answer = tk.StringVar()
+    entry = ttk.Combobox(window, textvariable=answer, values=options) if options else ttk.Entry(window, textvariable=answer)
+    entry.grid(row=1, column=0, padx=20, pady=10, sticky='ew')
+    def submit(*_):
+        if answer.get().strip():
+            dialog.close(answer.get())
+    ttk.Button(window, text='Continue', command=submit).grid(row=2, column=0, padx=20, pady=10, sticky='e')
+    window.protocol('WM_DELETE_WINDOW', dialog.close)
+    window.bind('<Escape>', lambda _: dialog.close())
+    entry.bind('<Return>', submit)
+    entry.focus_set()
+    return dialog
+
+
 def filter_quick_actions(actions: Iterable[QuickAction], query: str) -> tuple[QuickAction, ...]:
     needle = query.strip().casefold()
     return tuple(action for action in actions if not needle or needle in action.label.casefold())
