@@ -724,3 +724,267 @@ def test_preparation_interrupt_preserves_completed_results(tmp_path, budget_exha
         assert record.result.outcome == 'exhausted'
     assert [result.name for result in record.result.tool_results] == ['before']
     assert calls == ['before']
+
+
+@pytest.mark.parametrize(('payload', 'expected_outcome'), [
+    ('中文\x1b[13;2u回复\r'.encode(), 'completed'),
+    (b'\x1b[27u', 'interrupted'),
+    (b'\x1b[99;5u', 'interrupted'),
+    (b'\r', 'interrupted'),
+])
+def test_tui_reply_and_cancel_resume_saved_runtime_wait(tmp_path, monkeypatch, payload, expected_outcome):
+    from io import StringIO
+    import os
+
+    from saiworks.interaction.tui import TUIConsolePresenter
+    from saiworks.interaction.tui_events import TUIEvent, TUIEventKind
+
+    class Model:
+        def respond(self, session):
+            if not session.tool_results:
+                return ModelReply('Choose.', actions=[ToolAction('request_user_input', {'question': 'Target?'})])
+            return ModelReply('Selected ' + session.tool_results[-1].output, done=True)
+
+    runtime = runtime_for(tmp_path, Model(), [])
+    read_fd, write_fd = os.pipe()
+    source = os.fdopen(read_fd)
+    presenter = TUIConsolePresenter(input=source, output=StringIO())
+    presenter._runtime_active = True
+    presenter.controller.publish(TUIEvent(TUIEventKind.RUN_STARTED))
+    monkeypatch.setattr('saiworks.interaction.tui.os.kill', lambda *args: pytest.fail('reply/cancel sent SIGINT'))
+    ready = presenter._input_ready
+
+    def input_ready(timeout):
+        if presenter._user_input_waiter is None:
+            presenter._runtime_stop.set()
+            return False
+        return ready(timeout)
+
+    def show_question(value=''):
+        if value == 'Target?':
+            assert not runtime.is_running
+            assert runtime.get_submission('tui-wait').state == 'waiting_user'
+            presenter._runtime_input_loop()
+
+    monkeypatch.setattr(presenter, '_input_ready', input_ready)
+    monkeypatch.setattr(presenter, '_print', show_question)
+    try:
+        os.write(write_fd, payload)
+        runtime.configure_interaction(user_input_callback=presenter.request_user_input)
+        if expected_outcome == 'interrupted':
+            with pytest.raises(KeyboardInterrupt):
+                runtime.execute(UserRequest('choose', str(tmp_path)), submission_id='tui-wait')
+            summary = runtime.last_summary
+        else:
+            summary = runtime.execute(UserRequest('choose', str(tmp_path)), submission_id='tui-wait')
+        assert summary.outcome == expected_outcome
+        assert presenter._user_input_waiter is None
+        assert presenter._queued_prompt is None
+        if expected_outcome == 'completed':
+            assert summary.final_message == 'Selected 中文\n回复'
+        else:
+            assert runtime.get_submission('tui-wait').state == 'cancelled'
+    finally:
+        presenter._runtime_active = False
+        source.close()
+        os.close(write_fd)
+        runtime.close()
+
+
+@pytest.mark.parametrize('approved', [True, False])
+@pytest.mark.parametrize('draft', ['', '尚未提交的草稿\n继续编辑'])
+def test_tui_shell_approval_resumes_one_submission_without_reprinting_or_duplicate_user(tmp_path, monkeypatch, approved, draft):
+    from io import StringIO
+    import os
+
+    from saiworks.interaction.cli import CLI
+    from saiworks.interaction.tui import TUIConsolePresenter
+    from saiworks.interaction.tui_events import TUIEventKind
+    from saiworks.model.prompt import ModelPromptBuilder
+    from saiworks.sessions import SessionStore
+
+    prompt = '审批历史输入回归任务\n' + '中文多行任务说明' * 25 + '\n执行一次命令并返回结果。'
+    messages, model_task_ids = [], []
+    events, displayed_requests, approvals = [], [], []
+
+    class Model:
+        def respond(self, session):
+            messages.append(ModelPromptBuilder().build_messages(session))
+            model_task_ids.append(session.request.metadata['task_id'])
+            if not session.tool_results:
+                with presenter._input_lock:
+                    presenter._composer.edit(draft, presenter._history)
+                    presenter._composer.cursor = min(1, len(draft))
+                return ModelReply('Run shell.', actions=[ToolAction('shell_exec', {
+                    'command': 'printf approved >> approval-once.txt',
+                })])
+            assert presenter._composer.value == draft
+            return ModelReply('Finished.' if approved else 'Declined.', done=True)
+
+    runtime = runtime_for(tmp_path, Model(), [])
+    runtime.session_store = SessionStore(str(tmp_path / 'sessions'))
+    read_fd, write_fd = os.pipe()
+    source = os.fdopen(read_fd)
+    presenter = TUIConsolePresenter(input=source, output=StringIO())
+    # Drive approval input synchronously at its published event so this test
+    # covers the real decoder and decision path without terminal timing races.
+    monkeypatch.setattr(presenter, '_runtime_input_loop', lambda: None)
+    monkeypatch.setattr(presenter, '_runtime_render_loop', lambda: None)
+    monkeypatch.setattr(presenter, '_render_idle', lambda *_: None)
+    original_show_start, original_publish = presenter.show_start, presenter._publish
+
+    def show_start(request):
+        displayed_requests.append((request.metadata['task_id'], request.metadata['runtime_submission_id']))
+        original_show_start(request)
+
+    def publish(event):
+        events.append(event)
+        original_publish(event)
+        if event.kind == TUIEventKind.APPROVAL_REQUESTED:
+            record = runtime.get_submission(request.metadata['runtime_submission_id'])
+            saved = runtime.task_store.continuation(record.submission_id)
+            approval = runtime.task_store.get_approval(saved['interaction']['interaction_id'])
+            assert approval.task_id == record.task_id == model_task_ids[0]
+            assert approval.submission_id == record.submission_id
+            assert approval.action_name == 'shell_exec'
+            assert record.state == 'waiting_approval'
+            state = presenter.controller.drain()
+            approvals.append((event.entity_id, approval.approval_id, record.task_id, state.run_started_at))
+            assert state.approval.approval_id == event.entity_id
+            assert presenter._composer.value == draft
+            assert presenter._history == [prompt]
+            presenter._handle_approval_key(presenter._read_key(), state)
+            assert presenter._composer.value == draft
+            assert presenter._composer.cursor == min(1, len(draft))
+            assert presenter._queued_prompt is None
+
+    monkeypatch.setattr(presenter, 'show_start', show_start)
+    monkeypatch.setattr(presenter, '_publish', publish)
+    monkeypatch.setattr('saiworks.interaction.tui.os.kill', lambda *args: pytest.fail('approval submitted a new prompt'))
+    cli = CLI(runtime.engine, presenter, runtime=runtime)
+    runtime.configure_interaction(approval_callback=presenter.confirm_tool_action, progress_reporter=presenter)
+    try:
+        os.write(write_fd, b'\x1b[200~' + prompt.encode() + b'\x1b[201~\r' + (b'\r' if approved else b'n'))
+        submitted = presenter.prompt_input()
+        assert submitted == prompt
+        conversation = []
+        session = runtime.open_session(str(tmp_path), conversation)
+        cli.active_session = session
+        request = runtime.build_session_request(submitted, str(tmp_path), session, conversation, None)
+        generation = session.context_generation
+        assert runtime.prepare_turn(session, request, generation, conversation)
+        summary = runtime.execute_session_turn(request, submitted, session, conversation, generation)
+        record = runtime.get_submission(request.metadata['runtime_submission_id'])
+        assert summary.outcome == ('completed' if approved else 'blocked')
+        assert displayed_requests == [(record.task_id, record.submission_id)]
+        assert presenter._output.getvalue().count('审批历史输入回归任务') == 1
+        assert model_task_ids == [record.task_id, record.task_id]
+        assert len(runtime.task_store.snapshot(record.task_id).submissions) == 1
+        assert len(approvals) == 1
+        local_approval_id, runtime_approval_id, _, started_at = approvals[0]
+        assert [event.entity_id for event in events if event.kind == TUIEventKind.APPROVAL_RESOLVED] == [local_approval_id]
+        assert presenter.controller.drain().run_started_at == started_at
+        assert runtime.task_store.get_approval(runtime_approval_id).state == ('consumed' if approved else 'denied')
+        assert len(summary.tool_results) == 1
+        assert summary.tool_results[0].name == 'shell_exec'
+        assert summary.tool_results[0].success == approved
+        if approved:
+            assert (tmp_path / 'approval-once.txt').read_text() == 'approved'
+        else:
+            assert not (tmp_path / 'approval-once.txt').exists()
+        for model_messages in messages:
+            user_messages = [message for message in model_messages if message['role'] == 'user']
+            assert sum(prompt in str(message['content']) for message in user_messages) == 1
+            assert not any(message['content'] in {'Yes', 'No', 'y', 'n'} for message in user_messages)
+        persisted = runtime.session_store.load(session.session_id)
+        assert [message['role'] for message in persisted.messages] == ['user', 'assistant']
+        assert sum(prompt in message['content'] for message in persisted.messages) == 1
+        assert presenter._composer.value == presenter._composer_draft == draft
+        assert presenter._history == [prompt]
+        assert presenter._queued_prompt is None
+        assert not presenter._active_tool_names
+        assert all(tool.status.value != 'running' for tool in presenter.controller.drain().tools)
+        assert 'Executing' not in presenter._output.getvalue()
+    finally:
+        presenter._stop_runtime(TUIEventKind.RUN_FAILED)
+        source.close()
+        os.close(write_fd)
+        runtime.close()
+
+
+@pytest.mark.parametrize('cancelled', [False, True])
+def test_tui_progress_reconciles_suspended_tools_across_repeated_user_waits(tmp_path, monkeypatch, cancelled):
+    from io import StringIO
+
+    from saiworks.interaction.cli import CLI
+    from saiworks.interaction.tui import TUIConsolePresenter
+    from saiworks.interaction.tui_state import ToolStatus
+
+    calls, displayed, retired_handles, started_times = [], [], [], []
+    replies = iter([None] if cancelled else ['first', 'second'])
+    draft = '未提交的草稿\n继续编辑'
+
+    class Model:
+        def respond(self, session):
+            if not session.tool_results:
+                presenter._composer.set_value(draft)
+                return ModelReply('Ask twice.', actions=[
+                    ToolAction('before'),
+                    ToolAction('request_user_input', {'question': 'First?'}),
+                    ToolAction('request_user_input', {'question': 'Second?'}),
+                    ToolAction('after'),
+                ])
+            return ModelReply('Done.', done=True)
+
+    runtime = runtime_for(tmp_path, Model(), calls)
+    presenter = TUIConsolePresenter(output=StringIO())
+    monkeypatch.setattr(presenter, '_runtime_input_loop', lambda: None)
+    monkeypatch.setattr(presenter, '_runtime_render_loop', lambda: None)
+    show_start = presenter.show_start
+
+    def display(request):
+        displayed.append(request.metadata['task_id'])
+        show_start(request)
+
+    def reply(question, options):
+        assert not runtime.is_running
+        state = presenter.controller.drain()
+        running = [tool for tool in state.tools if tool.status == ToolStatus.RUNNING]
+        assert len(running) == 1
+        assert running[0].name == 'request_user_input'
+        retired_handles.append(running[0].tool_id)
+        started_times.append(state.run_started_at)
+        return next(replies)
+
+    monkeypatch.setattr(presenter, 'show_start', display)
+    cli = CLI(runtime.engine, presenter, runtime=runtime)
+    runtime.configure_interaction(progress_reporter=presenter, user_input_callback=reply)
+    request = UserRequest('展示句柄续跑回归任务', str(tmp_path), {'runtime_submission_id': 'progress-waits'})
+    try:
+        if cancelled:
+            with pytest.raises(KeyboardInterrupt):
+                cli.run(request)
+            summary = runtime.last_summary
+            assert summary.outcome == 'interrupted'
+            assert calls == ['before']
+        else:
+            summary = cli.run(request)
+            assert summary.outcome == 'completed'
+            assert calls == ['before', 'after']
+        state = presenter.controller.drain()
+        assert all(tool.status != ToolStatus.RUNNING for tool in state.tools)
+        assert not presenter._active_tool_names
+        assert not set(retired_handles) & {tool.tool_id for tool in state.tools}
+        assert state.run_started_at == started_times[0]
+        assert len(set(started_times)) == 1
+        assert len(displayed) == 1
+        assert presenter._output.getvalue().count('展示句柄续跑回归任务') == 1
+        assert 'Executing' not in presenter._output.getvalue()
+        assert presenter._output.getvalue().count('before →') == 1
+        assert presenter._composer.value == presenter._composer_draft == draft
+        if not cancelled:
+            finished_questions = [tool for tool in state.tools if tool.name == 'request_user_input']
+            assert len(finished_questions) == 2
+            assert all(tool.status == ToolStatus.SUCCEEDED for tool in finished_questions)
+    finally:
+        runtime.close()

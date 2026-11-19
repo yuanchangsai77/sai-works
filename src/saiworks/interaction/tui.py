@@ -1,7 +1,10 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import deque
+from contextlib import contextmanager
+from dataclasses import dataclass, field, replace
 from io import StringIO
+import errno
 import json
 import os
 import re
@@ -12,11 +15,11 @@ import sys
 import termios
 import threading
 import time
-import tty
 import unicodedata
 from uuid import uuid4
 
 from .presenter import ConsolePresenter
+from .input import PasteInput, TerminalInput
 from .terminal import Ansi
 from .tui_events import TUIEvent, TUIEventKind, TUIEventQueue
 from .tui_state import RunStatus, TUIState, ToolStatus, reduce_tui_state
@@ -29,6 +32,21 @@ def _display_width(value: str) -> int:
             continue
         width += 2 if unicodedata.east_asian_width(character) in {"F", "W"} else 1
     return width
+
+
+def _visible_input_character(character: str) -> str:
+    if character == "\n":
+        return character
+    if character == "\t":
+        return r"\t"
+    code = ord(character)
+    if code < 32 or 127 <= code <= 159:
+        return f"\\x{code:02x}"
+    return character
+
+
+def _visible_input_text(value: str) -> str:
+    return "".join(_visible_input_character(character) for character in value)
 
 
 def _truncate_display(value: str, width: int) -> str:
@@ -230,6 +248,37 @@ class TUIRenderer:
 from .commands import SlashCommandRegistry, default_slash_command_registry
 
 
+def _normalize_key(key: str) -> str:
+    """Translate supported CSI-u/modifyOtherKeys keys to existing operations."""
+    if isinstance(key, PasteInput):
+        return key
+    match = re.fullmatch(r"\x1b\[(\d+)(?:;(\d+))?u", key)
+    if match:
+        code = int(match[1])
+        modifiers = int(match[2] or "1") - 1
+    else:
+        match = re.fullmatch(r"\x1b\[27;(\d+);(\d+)~", key)
+        if not match:
+            return key
+        code = int(match[2])
+        modifiers = int(match[1]) - 1
+    # Lock flags do not change the operation of these control keys.
+    modifiers &= ~(64 | 128)
+    if code == 57414:  # Keypad Enter is distinct under keyboard enhancement.
+        code = 13
+    if modifiers == 0:
+        return {
+            27: "\x1b", 13: "\r", 9: "\t", 127: "\x7f",
+            57417: "\x1b[D", 57418: "\x1b[C", 57419: "\x1b[A", 57420: "\x1b[B",
+            57423: "\x1b[H", 57424: "\x1b[F",
+        }.get(code, key)
+    if code == 13 and modifiers in {1, 2}:  # Shift+Enter / Alt+Enter
+        return "\x1b\r"
+    if modifiers == 4 and (65 <= code <= 90 or 97 <= code <= 122):
+        return chr(code & 31)
+    return key
+
+
 @dataclass
 class ComposerState:
     value: str = ""
@@ -264,6 +313,10 @@ class ComposerState:
 
 
     def edit(self, key: str, history: list[str]) -> str | None:
+        if isinstance(key, PasteInput):
+            self.insert(str(key).replace("\r\n", "\n").replace("\r", "\n"))
+            return "changed"
+        key = _normalize_key(key)
         matches = self.get_completion_matches()
         if matches:
             if self.completion_index >= len(matches):
@@ -392,6 +445,13 @@ class ComposerState:
 
 
 
+@dataclass
+class _UserInputWaiter:
+    draft: ComposerState
+    completed: threading.Event = field(default_factory=threading.Event)
+    answer: str | None = None
+
+
 class InlineTerminalSurface:
     """Redraw the transient tail directly after committed scrollback output."""
 
@@ -492,14 +552,33 @@ class TUIConsolePresenter(ConsolePresenter):
         self._runtime_stop = threading.Event()
         self._runtime_render_thread: threading.Thread | None = None
         self._runtime_input_thread: threading.Thread | None = None
-        self._terminal_settings = None
         self._approval_waiters: dict[str, tuple[threading.Event, list[bool]]] = {}
         self._approval_lock = threading.Lock()
+        self._input_lock = threading.RLock()
+        self._user_input_waiter: _UserInputWaiter | None = None
+        self._input_bytes: deque[int] = deque()
+        self._key_bytes = bytearray()
+        self._paste_bytes: bytearray | None = None
+        self._pending_keys: deque[str] = deque()
         self._flushed_tool_ids: set[str] = set()
         self._active_tool_names: dict[str, str] = {}
         self._stable_tail_has_separator = False
         self._tui_model_streams: dict[str, dict[str, list[str]]] = {}
         self._tui_model_replies: dict[str, tuple[str, bool]] = {}
+        self._reader_lock = threading.RLock()
+        self.prompt_box.set_terminal_input(TerminalInput(
+            read_key=lambda: self._read_key(),
+            ready=lambda timeout: self._input_ready(timeout),
+            mode=self._selection_input_mode,
+            available=lambda: self._can_use_native_input(),
+        ))
+
+    @contextmanager
+    def _selection_input_mode(self):
+        if self._runtime_active:
+            raise RuntimeError("Running selections must use the runtime input dispatcher")
+        with self._raw_input():
+            yield
 
     def clear_screen(self) -> None:
         """Clear the terminal and redraw the TUI idle frame."""
@@ -526,7 +605,7 @@ class TUIConsolePresenter(ConsolePresenter):
         super().show_session_state(session, resumed=resumed, engine=engine)
 
     def show_user_prompt(self, prompt: str) -> None:
-        lines = self.prompt_box.wrap_prompt_value(prompt)
+        lines = self.prompt_box.wrap_prompt_value(_visible_input_text(prompt))
         prompt_lbl = f" {Ansi.CYAN}SaiWorks>{Ansi.RESET}"
         background = "\033[48;5;236m"
         blank = f"{background}\033[K{Ansi.RESET}"
@@ -541,7 +620,7 @@ class TUIConsolePresenter(ConsolePresenter):
     def show_start(self, request) -> None:
         self._pending_prompt = request.prompt
         self._cwd = request.cwd
-        lines = self.prompt_box.wrap_prompt_value(request.prompt)
+        lines = self.prompt_box.wrap_prompt_value(_visible_input_text(request.prompt))
         prompt = f" {Ansi.CYAN}SaiWorks>{Ansi.RESET}"
         background = "\033[48;5;236m"
         blank = f"{background}\033[K{Ansi.RESET}"
@@ -575,13 +654,18 @@ class TUIConsolePresenter(ConsolePresenter):
                     if not self._input_ready(timeout=0.1):
                         continue
                     key = self._read_key()
+                    if key is None:
+                        continue
                     result = self._composer.edit(key, self._history)
-                    if key == "\x03":
+                    if not isinstance(key, PasteInput) and key == "\x03":
                         raise KeyboardInterrupt
                     if result == "eof":
                         raise EOFError
                     if result == "submit":
-                        value = self._composer.value.strip()
+                        with self._input_lock:
+                            value = self._composer.value.strip()
+                            self._composer.set_value("")
+                            self._composer_draft = ""
                         self._surface.clear()
                         if value:
                             self._history.append(value)
@@ -591,6 +675,40 @@ class TUIConsolePresenter(ConsolePresenter):
                         last_size = _terminal_size(self._output)
         finally:
             self._surface.clear()
+
+    def request_user_input(self, question: str, options: list[str]):
+        if not self._runtime_active or not self._can_use_native_input():
+            return super().request_user_input(question, options)
+        # The runtime input thread remains the sole terminal reader. The
+        # synchronous Runtime adapter owns replying/cancelling the durable wait.
+        waiter = None
+        try:
+            with self._input_lock:
+                if self._user_input_waiter is not None:
+                    raise RuntimeError("Already waiting for a user reply")
+                waiter = _UserInputWaiter(draft=replace(self._composer))
+                self._user_input_waiter = waiter
+                self._composer.set_value("")
+            self._print(question)
+            if options:
+                self._print('Suggested answers: ' + ' / '.join(options))
+            self._print('Leave blank to cancel this task.')
+            while not waiter.completed.wait(0.05):
+                if not self._runtime_active:
+                    return None
+            return waiter.answer
+        finally:
+            if waiter is not None:
+                self._resolve_user_input(waiter)
+
+    def _resolve_user_input(self, waiter: _UserInputWaiter, answer: str | None = None) -> None:
+        with self._input_lock:
+            if self._user_input_waiter is not waiter:
+                return
+            waiter.answer = answer
+            self._composer = waiter.draft
+            self._user_input_waiter = None
+            waiter.completed.set()
 
     def show_status_bar(self, engine=None, active_tasks_count=0, is_running=False, left_override=None) -> None:
         if not is_running:
@@ -616,6 +734,10 @@ class TUIConsolePresenter(ConsolePresenter):
     def clear_running_status_bar(self, tools_count: int) -> None:
         self._stop_runtime(TUIEventKind.RUN_FINISHED)
         self._flush_tool_transcript()
+
+    def show_run_resumed(self) -> None:
+        self._active_tool_names.clear()
+        self._publish(TUIEvent(TUIEventKind.RUN_RESUMED))
 
     def show_interrupted(self) -> None:
         self._stop_runtime(TUIEventKind.RUN_FAILED)
@@ -786,7 +908,9 @@ class TUIConsolePresenter(ConsolePresenter):
             return
         self._runtime_active = True
         self._runtime_stop.clear()
-        self._composer.set_value(self._composer_draft)
+        with self._input_lock:
+            self._composer.set_value(self._composer_draft)
+            self._composer_draft = ""
         self._runtime_render_thread = threading.Thread(
             target=self._runtime_render_loop,
             name="saiworks-tui-render",
@@ -807,15 +931,19 @@ class TUIConsolePresenter(ConsolePresenter):
         state = self.controller.drain()
         if state.run_started_at is not None:
             self._pending_worked_seconds = state.elapsed()
-        if self._queued_prompt is None:
-            self._composer_draft = self._composer.value
+        with self._input_lock:
+            self._runtime_active = False
+            self._runtime_stop.set()
+            if self._user_input_waiter is not None:
+                self._resolve_user_input(self._user_input_waiter)
+            if self._queued_prompt is None:
+                self._composer_draft = self._composer.value
         self.controller.publish(TUIEvent(outcome))
-        self._runtime_active = False
-        self._runtime_stop.set()
         for thread in (self._runtime_input_thread, self._runtime_render_thread):
             if thread is not None and thread.is_alive():
-                thread.join(timeout=1.0)
-        self._restore_terminal()
+                # Input reads poll rather than block on a complete key/paste.
+                # Never transfer stdin while its previous reader is alive.
+                thread.join(timeout=None if thread is self._runtime_input_thread else 1.0)
         self._surface.clear()
         self.controller.drain()
         self._runtime_input_thread = None
@@ -833,23 +961,37 @@ class TUIConsolePresenter(ConsolePresenter):
                 while not self._runtime_stop.is_set():
                     if not self._input_ready(timeout=0.05):
                         continue
-                    key = self._read_key()
-                    state = self.controller.drain()
-                    if state.approval is not None:
-                        self._handle_approval_key(key, state)
+                    key = self._read_key(stop_event=self._runtime_stop)
+                    if key is None:
                         continue
-                    if key in {"\x03", "\x1b"}:
-                        self._publish(TUIEvent(TUIEventKind.RUN_CANCELLING))
-                        os.kill(os.getpid(), signal.SIGINT)
+                    with self._input_lock:
+                        if self._runtime_stop.is_set():
+                            self._pending_keys.appendleft(key)
+                            return
+                        state = self.controller.drain()
+                        if state.approval is not None:
+                            self._handle_approval_key(key, state)
+                            continue
+                        if not isinstance(key, PasteInput) and key in {"\x03", "\x1b"}:
+                            if self._user_input_waiter is not None:
+                                self._resolve_user_input(self._user_input_waiter)
+                                interrupt = False
+                            else:
+                                interrupt = True
+                        else:
+                            result = self._composer.edit(key, self._history)
+                            interrupt = result == "submit" and self._queue_runtime_prompt(state)
+                    if interrupt:
+                        self._interrupt_runtime()
                         return
-                    result = self._composer.edit(key, self._history)
-                    if result == "submit" and self._submit_runtime_prompt(state):
-                        return
-        finally:
-            self._restore_terminal()
+        except EOFError:
+            if not self._runtime_stop.is_set():
+                self._interrupt_runtime()
 
     def _handle_approval_key(self, key: str, state: TUIState) -> None:
         approval = state.approval
+        if isinstance(key, PasteInput):
+            return
         if approval is None:
             return
         if key in {"\x03", "\x1b", "n", "N"}:
@@ -864,15 +1006,30 @@ class TUIConsolePresenter(ConsolePresenter):
             self._select_approval(approval.approval_id, approval.selected + 1)
 
     def _submit_runtime_prompt(self, state: TUIState | None = None) -> bool:
+        interrupt = self._queue_runtime_prompt(state)
+        if interrupt:
+            self._interrupt_runtime()
+        return interrupt
+
+    def _queue_runtime_prompt(self, state: TUIState | None = None) -> bool:
         state = state or self.controller.drain()
-        prompt = self._composer.value.strip()
-        if state.run_status != RunStatus.WORKING or not prompt:
-            return False
-        self._queued_prompt = prompt
-        self._composer_draft = ""
+        with self._input_lock:
+            if state.approval is not None:
+                return False
+            if self._user_input_waiter is not None:
+                self._resolve_user_input(self._user_input_waiter, self._composer.value.strip() or None)
+                return False
+            prompt = self._composer.value.strip()
+            if state.run_status != RunStatus.WORKING or not prompt:
+                return False
+            self._queued_prompt = prompt
+            self._composer.set_value("")
+            self._composer_draft = ""
+            return True
+
+    def _interrupt_runtime(self) -> None:
         self._publish(TUIEvent(TUIEventKind.RUN_CANCELLING))
         os.kill(os.getpid(), signal.SIGINT)
-        return True
 
     def _render_idle(self, engine=None) -> None:
         size = _terminal_size(self._output)
@@ -905,22 +1062,25 @@ class TUIConsolePresenter(ConsolePresenter):
         state: TUIState,
         columns: int,
     ) -> tuple[list[str], int, int]:
-        activity = [
-            self.renderer.ansi_row(style, text)
-            for style, text in self.renderer.render_rows(state, include_runtime=False)
-        ]
-        composer_rows, cursor_row, cursor_column = self._composer_rows(columns)
-        blank = f"\033[48;5;236m\033[K{Ansi.RESET}"
-        runtime = self.renderer.runtime_row(state)
-        metadata = "" if runtime is None else self.renderer.ansi_row(*runtime)
-        matches = self._composer.get_completion_matches()
-        completion_rows = self._completion_rows(matches)
-        rows = [*activity, "", blank, *composer_rows, blank, *completion_rows, metadata]
-        return (
-            rows,
-            len(activity) + 2 + cursor_row,
-            cursor_column,
-        )
+        with self._input_lock:
+            activity = [
+                self.renderer.ansi_row(style, text)
+                for style, text in self.renderer.render_rows(state, include_runtime=False)
+            ]
+            composer_rows, cursor_row, cursor_column = self._composer_rows(columns)
+            blank = f"\033[48;5;236m\033[K{Ansi.RESET}"
+            runtime = self.renderer.runtime_row(state)
+            metadata = "" if runtime is None else self.renderer.ansi_row(*runtime)
+            if self._user_input_waiter is not None:
+                metadata = f"{Ansi.GRAY}Waiting for your reply · Enter to reply · esc to cancel{Ansi.RESET}"
+            matches = self._composer.get_completion_matches()
+            completion_rows = self._completion_rows(matches)
+            rows = [*activity, "", blank, *composer_rows, blank, *completion_rows, metadata]
+            return (
+                rows,
+                len(activity) + 2 + cursor_row,
+                cursor_column,
+            )
 
     def _composer_rows(self, columns: int) -> tuple[list[str], int, int]:
         prompt = " SaiWorks> "
@@ -1021,14 +1181,15 @@ class TUIConsolePresenter(ConsolePresenter):
                 limit = max(columns - 3, 1)
                 positions.append((row, used))
                 continue
-            width = max(_display_width(character), 1)
-            if used + width > limit and lines[-1]:
-                row += 1
-                lines.append("")
-                used = 0
-                limit = max(columns - 3, 1)
-            lines[-1] += character
-            used += width
+            for visible in _visible_input_character(character):
+                width = max(_display_width(visible), 1)
+                if used + width > limit and lines[-1]:
+                    row += 1
+                    lines.append("")
+                    used = 0
+                    limit = max(columns - 3, 1)
+                lines[-1] += visible
+                used += width
             positions.append((row, used))
         cursor_index = min(self._composer.cursor, len(positions) - 1)
         cursor_row, cursor_column = positions[cursor_index]
@@ -1149,11 +1310,12 @@ class TUIConsolePresenter(ConsolePresenter):
     def _resolve_approval(self, approval_id: str, approved: bool) -> None:
         with self._approval_lock:
             waiter = self._approval_waiters.pop(approval_id, None)
+        if waiter is None:
+            return
         self._publish(TUIEvent(TUIEventKind.APPROVAL_RESOLVED, entity_id=approval_id))
-        if waiter is not None:
-            completed, result = waiter
-            result.append(approved)
-            completed.set()
+        completed, result = waiter
+        result.append(approved)
+        completed.set()
 
     def _deny_all_approvals(self) -> None:
         with self._approval_lock:
@@ -1173,6 +1335,8 @@ class TUIConsolePresenter(ConsolePresenter):
         return source if isinstance(source, int) else source.fileno()
 
     def _input_ready(self, timeout: float | None = None) -> bool:
+        if self._pending_keys or self._input_bytes:
+            return True
         readable, _, _ = select.select([self._input_fd()], [], [], timeout)
         return bool(readable)
 
@@ -1180,77 +1344,131 @@ class TUIConsolePresenter(ConsolePresenter):
         def __init__(self, presenter: "TUIConsolePresenter") -> None:
             self.presenter = presenter
             self.settings = None
+            self.fd = None
 
         def __enter__(self):
-            fd = self.presenter._input_fd()
+            self.presenter._reader_lock.acquire()
             try:
-                self.settings = termios.tcgetattr(fd)
-                tty.setcbreak(fd)
-                self.presenter._terminal_settings = (fd, self.settings)
-            except (OSError, termios.error):
-                self.settings = None
-            self.presenter._output.write("\033[?2004h")
-            self.presenter._output.flush()
+                self.fd = self.presenter._input_fd()
+                try:
+                    self.settings = termios.tcgetattr(self.fd)
+                except (OSError, termios.error) as error:
+                    if error.args[0] != errno.ENOTTY:
+                        raise
+                if self.settings is not None:
+                    settings = list(self.settings)
+                    settings[6] = list(self.settings[6])
+                    # Preserve output processing, but deliver input bytes to
+                    # the decoder before signals, flow control, or CR mapping.
+                    settings[0] &= ~(termios.BRKINT | termios.IGNBRK | termios.ICRNL | termios.INLCR
+                                     | termios.IGNCR | termios.INPCK | termios.ISTRIP | termios.PARMRK
+                                     | termios.IXON | termios.IXOFF | termios.IXANY)
+                    settings[3] &= ~(termios.ECHO | termios.ECHONL | termios.ICANON | termios.ISIG | termios.IEXTEN)
+                    settings[6][termios.VMIN] = 1
+                    settings[6][termios.VTIME] = 0
+                    termios.tcsetattr(self.fd, termios.TCSANOW, settings)
+                self.presenter._output.write("\033[?2004h\033[>1u")
+                self.presenter._output.flush()
+            except BaseException:
+                try:
+                    self._restore()
+                finally:
+                    self.presenter._reader_lock.release()
+                raise
             return self
 
+        def _restore(self):
+            if self.settings is not None:
+                try:
+                    termios.tcsetattr(self.fd, termios.TCSADRAIN, self.settings)
+                except (OSError, termios.error):
+                    pass
+
         def __exit__(self, _type, _value, _traceback):
-            self.presenter._output.write("\033[?2004l")
-            self.presenter._output.flush()
-            self.presenter._restore_terminal()
+            try:
+                self.presenter._output.write("\033[<u\033[?2004l")
+                self.presenter._output.flush()
+            finally:
+                try:
+                    self._restore()
+                finally:
+                    self.presenter._reader_lock.release()
 
     def _raw_input(self):
         return self._RawInputContext(self)
 
-    def _restore_terminal(self) -> None:
-        settings = self._terminal_settings
-        if settings is None:
-            return
-        fd, previous = settings
-        self._terminal_settings = None
-        try:
-            termios.tcsetattr(fd, termios.TCSADRAIN, previous)
-        except (OSError, termios.error):
-            pass
+    def _read_input_byte(
+        self, fd: int, *, stop_event: threading.Event | None = None, timeout: float = 0.0,
+    ) -> bytes | None:
+        if stop_event is not None and stop_event.is_set():
+            return None
+        if self._input_bytes:
+            return bytes([self._input_bytes.popleft()])
+        readable, _, _ = select.select([fd], [], [], timeout)
+        if not readable:
+            return None
+        chunk = os.read(fd, 4096)
+        if not chunk:
+            return b""
+        self._input_bytes.extend(chunk[1:])
+        return chunk[:1]
 
-    def _read_key(self) -> str:
+    def _read_key(self, *, stop_event: threading.Event | None = None) -> str | None:
+        """Poll one event, retaining incomplete input across reader handoffs."""
+        if self._pending_keys:
+            return self._pending_keys.popleft()
         fd = self._input_fd()
-        raw = os.read(fd, 1)
-        if raw != b"\x1b":
-            while True:
+        if self._paste_bytes is not None:
+            return self._read_paste(fd, stop_event=stop_event)
+        raw = self._key_bytes
+        while True:
+            key = None
+            if raw and (raw[0] != 27 or (len(raw) > 1 and raw[1] not in {91, 79})):
                 try:
-                    return raw.decode()
+                    key = raw.decode()
                 except UnicodeDecodeError as error:
                     if error.reason != "unexpected end of data":
-                        return raw.decode(errors="replace")
-                    raw += os.read(fd, 1)
+                        key = raw.decode(errors="replace")
+            elif len(raw) >= 3 and (64 <= raw[-1] <= 126 or len(raw) >= 33):
+                key = raw.decode(errors="replace")
+            if key is not None:
+                raw.clear()
+                if key == "\x1b[200~":
+                    self._paste_bytes = bytearray()
+                    return self._read_paste(fd, stop_event=stop_event)
+                return _normalize_key(key)
+            chunk = self._read_input_byte(
+                fd, stop_event=stop_event, timeout=0.02 if raw == b"\x1b" else 0.0,
+            )
+            if chunk is None:
+                if raw == b"\x1b":
+                    raw.clear()
+                    return "\x1b"
+                return None
+            if not chunk:
+                if raw:
+                    key = raw.decode(errors="replace")
+                    raw.clear()
+                    return _normalize_key(key)
+                raise EOFError
+            raw.extend(chunk)
 
-        sequence = "\x1b"
-        for _ in range(32):
-            readable, _, _ = select.select([fd], [], [], 0.02)
-            if not readable:
-                break
-            character = os.read(fd, 1).decode(errors="ignore")
-            sequence += character
-            if len(sequence) == 2 and character not in {"[", "O"}:
-                break
-            if len(sequence) >= 3 and "@" <= character <= "~":
-                break
-        if sequence == "\x1b[200~":
-            return self._read_paste(fd)
-        return sequence
-
-    @staticmethod
-    def _read_paste(fd: int) -> str:
+    def _read_paste(self, fd: int, *, stop_event: threading.Event | None = None) -> PasteInput | None:
         terminator = b"\x1b[201~"
-        payload = bytearray()
+        if self._paste_bytes is None:
+            self._paste_bytes = bytearray()
+        payload = self._paste_bytes
         while not payload.endswith(terminator):
-            chunk = os.read(fd, 1)
+            chunk = self._read_input_byte(fd, stop_event=stop_event)
+            if chunk is None:
+                return None
             if not chunk:
                 break
             payload.extend(chunk)
         if payload.endswith(terminator):
             del payload[-len(terminator) :]
-        return payload.decode(errors="replace")
+        self._paste_bytes = None
+        return PasteInput(payload.decode(errors="replace"))
 
 
 def should_use_tui() -> bool:

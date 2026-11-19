@@ -6,7 +6,9 @@ except ImportError:
     pass
 
 from pathlib import Path
+from contextlib import nullcontext
 
+from .input import PasteInput
 from ..sessions.messages import SESSION_REQUEST_MESSAGE_FORMAT
 from ..types import ExecutionSummary, SessionRecord, StoredSession, UserRequest, WorkspaceSessionState
 from ..runtime import Runtime
@@ -54,6 +56,7 @@ class CLI:
         self.runtime.on_run_finished = self._show_run_finished
         self.runtime.on_run_interrupted = self._show_run_interrupted
         self.active_session = None
+        self._displayed_run_identity = None
 
 
     def run(self, request: UserRequest) -> ExecutionSummary:
@@ -299,7 +302,8 @@ class CLI:
         import termios
         import signal
 
-        if not sys.stdin.isatty() or not sys.stdout.isatty():
+        shared_input = getattr(getattr(self.presenter, "prompt_box", None), "terminal_input", None)
+        if shared_input is None and (not sys.stdin.isatty() or not sys.stdout.isatty()):
             self.presenter.show_session_list(sessions)
             while True:
                 raw = input(f"{prompt} (Enter to cancel): ").strip()
@@ -313,8 +317,8 @@ class CLI:
                     return self.load_session(sessions[index - 1].session_id)
                 print(f"[SaiWorks] choose a number between 1 and {len(sessions)}")
 
-        fd = sys.stdin.fileno()
-        previous_settings = termios.tcgetattr(fd)
+        fd = sys.stdin.fileno() if shared_input is None else None
+        previous_settings = termios.tcgetattr(fd) if shared_input is None else None
         selected = 0
         max_visible = 3
         window_start = 0
@@ -453,31 +457,38 @@ class CLI:
             rendered_lines = len(lines)
 
         try:
-            tty.setcbreak(fd)
-            render_frame()
-            while True:
-                readable, _, _ = select.select([fd], [], [], 0.1)
-                if not readable:
-                    continue
-                key = read_key()
-                if key in {"\r", "\n"}:
-                    if rendered_lines > 0:
-                        sys.stdout.write(f"\r\033[{rendered_lines}A\033[J")
-                        sys.stdout.flush()
-                    return self.load_session(sessions[selected].session_id)
-                if key in {"\x1b", "\x03"}:
-                    if rendered_lines > 0:
-                        sys.stdout.write(f"\r\033[{rendered_lines}A\033[J")
-                        sys.stdout.flush()
-                    return None
-                if key in {"\x1b[A", "\x1bOA", "k"}:
-                    selected = (selected - 1) % len(sessions)
-                    render_frame()
-                elif key in {"\x1b[B", "\x1bOB", "j"}:
-                    selected = (selected + 1) % len(sessions)
-                    render_frame()
+            with shared_input.mode() if shared_input is not None else nullcontext():
+                if shared_input is None:
+                    tty.setcbreak(fd, termios.TCSANOW)
+                render_frame()
+                while True:
+                    ready = shared_input.ready(0.1) if shared_input is not None else bool(select.select([fd], [], [], 0.1)[0])
+                    if not ready:
+                        continue
+                    key = shared_input.read_key() if shared_input is not None else read_key()
+                    if key is None or isinstance(key, PasteInput):
+                        continue
+                    if key in {"\r", "\n"}:
+                        if rendered_lines > 0:
+                            sys.stdout.write(f"\r\033[{rendered_lines}A\033[J")
+                            sys.stdout.flush()
+                        return self.load_session(sessions[selected].session_id)
+                    if key in {"\x1b", "\x03"}:
+                        if rendered_lines > 0:
+                            sys.stdout.write(f"\r\033[{rendered_lines}A\033[J")
+                            sys.stdout.flush()
+                        return None
+                    if key in {"\x1b[A", "\x1bOA", "k"}:
+                        selected = (selected - 1) % len(sessions)
+                        render_frame()
+                    elif key in {"\x1b[B", "\x1bOB", "j"}:
+                        selected = (selected + 1) % len(sessions)
+                        render_frame()
+        except (KeyboardInterrupt, EOFError):
+            return None
         finally:
-            termios.tcsetattr(fd, termios.TCSADRAIN, previous_settings)
+            if previous_settings is not None:
+                termios.tcsetattr(fd, termios.TCSADRAIN, previous_settings)
 
 
     def handle_resume_command(
@@ -541,14 +552,23 @@ class CLI:
         return self.runtime.execute(request)
 
     def _show_run_started(self, request) -> None:
+        identity = (request.metadata.get("task_id"), request.metadata.get("runtime_submission_id"))
+        if any(identity) and identity == self._displayed_run_identity:
+            # Runtime announces each execution segment, including approval
+            # continuation. The original user submission is displayed once.
+            self.presenter.show_run_resumed()
+            return
+        self._displayed_run_identity = identity if any(identity) else None
         self.presenter.show_start(request)
         self.presenter.show_status_bar(engine=self.runtime.view(), is_running=True)
 
     def _show_run_finished(self, summary) -> None:
+        self._displayed_run_identity = None
         self.presenter.clear_running_status_bar(len(summary.tool_results))
         self.presenter.show_summary(summary)
 
     def _show_run_interrupted(self, summary) -> None:
+        self._displayed_run_identity = None
         self.presenter.clear_running_status_bar(len(summary.tool_results))
         self.presenter.show_interrupted()
         if self.active_session is not None:

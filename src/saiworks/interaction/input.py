@@ -9,9 +9,25 @@ import time
 import tty
 import unicodedata
 from collections.abc import Callable
+from contextlib import AbstractContextManager
+from dataclasses import dataclass
 from math import ceil
 
 from .terminal import colored_border, stable_terminal_line, terminal_columns
+
+
+class PasteInput(str):
+    """Terminal paste payload; never a submit, cancel, or approval key."""
+
+
+@dataclass(frozen=True)
+class TerminalInput:
+    """Shared input operations; decoder state stays with the input owner."""
+
+    read_key: Callable[[], str | None]
+    ready: Callable[[float], bool]
+    mode: Callable[[], AbstractContextManager]
+    available: Callable[[], bool]
 
 
 class StatusBar:
@@ -90,6 +106,15 @@ class PromptBox:
         self._frame_active = False
         self._frame_renderer: Callable[[str, int, object], None] | None = None
         self._selection_renderer: Callable[[tuple[str, ...], int, object], None] | None = None
+        self._terminal_input: TerminalInput | None = None
+
+    def set_terminal_input(self, terminal_input: TerminalInput) -> None:
+        self._terminal_input = terminal_input
+
+    @property
+    def terminal_input(self) -> TerminalInput | None:
+        source = self._terminal_input
+        return source if source is not None and source.available() else None
 
     def set_frame_renderer(self, renderer: Callable[[str, int, object], None] | None) -> None:
         self._frame_renderer = renderer
@@ -438,6 +463,9 @@ class PromptBox:
         prompt="    Selection [1-2]: ",
         options: tuple[str, ...] = ("Yes", "No"),
     ) -> str | None:
+        source = self.terminal_input
+        if source is not None:
+            return self._read_shared_selection(source, engine, options)
         if self._selection_renderer is not None and sys.stdin.isatty() and sys.stdout.isatty():
             return self._read_screen_selection(engine, options)
 
@@ -463,6 +491,44 @@ class PromptBox:
             self._clear_input_frame()
             print()
             self.show_border()
+            return None
+
+    def _read_shared_selection(self, source: TerminalInput, engine, options: tuple[str, ...]) -> str | None:
+        selected = 0
+
+        def render(redraw=False):
+            if self._selection_renderer is not None:
+                self._selection_renderer(options, selected, engine)
+            else:
+                self._render_selection_options(options, selected, redraw=redraw)
+
+        try:
+            with source.mode():
+                render()
+                while True:
+                    if not source.ready(0.1):
+                        continue
+                    key = source.read_key()
+                    if key is None or isinstance(key, PasteInput):
+                        continue
+                    if key in {"\r", "\n"}:
+                        return str(selected + 1)
+                    if key in {"\x03", "\x1b"}:
+                        return None
+                    if key in {"\x1b[A", "\x1bOA", "k"}:
+                        selected = (selected - 1) % len(options)
+                    elif key in {"\x1b[B", "\x1bOB", "j"}:
+                        selected = (selected + 1) % len(options)
+                    elif key.isascii() and key.isdecimal() and len(key) == 1 and 1 <= int(key) <= len(options):
+                        return key
+                    elif key.lower() == "y":
+                        return "1"
+                    elif key.lower() == "n" and len(options) >= 2:
+                        return "2"
+                    else:
+                        continue
+                    render(redraw=True)
+        except (KeyboardInterrupt, EOFError):
             return None
 
     def _read_screen_selection(self, engine, options: tuple[str, ...]) -> str | None:

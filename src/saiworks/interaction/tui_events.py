@@ -10,6 +10,7 @@ from typing import Any
 
 class TUIEventKind(StrEnum):
     RUN_STARTED = "run.started"
+    RUN_RESUMED = "run.resumed"
     RUN_CANCELLING = "run.cancelling"
     RUN_FINISHED = "run.finished"
     RUN_FAILED = "run.failed"

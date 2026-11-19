@@ -44,6 +44,10 @@ class ConsolePresenter:
     def show_start(self, request: UserRequest) -> None:
         pass
 
+    def show_run_resumed(self) -> None:
+        """Continue presenting the current submission without replaying input."""
+        pass
+
     def show_summary(self, summary: ExecutionSummary) -> None:
         thinking = self._extract_thinking(summary.final_message)
         streamed_thinking = self._last_streamed_thinking.strip()

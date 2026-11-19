@@ -3690,3 +3690,42 @@ def test_engine_never_replays_effectful_shell_after_post_execution_cd_escape(tmp
     assert summary.tool_results[0].error_code == "path_outside_workspace"
     assert (tmp_path / "marker").read_text() == "x"
     assert "workspace_grant" not in summary.tool_results[0].metadata
+
+
+@pytest.mark.parametrize('terminal', ['finished', 'interrupted'])
+def test_cli_displays_submission_once_across_resume_and_allows_identical_next_input(tmp_path, terminal):
+    from types import SimpleNamespace
+
+    displayed, status_starts = [], []
+
+    class Presenter(ConsolePresenter):
+        def show_start(self, request):
+            displayed.append(request.metadata['runtime_submission_id'])
+
+        def show_status_bar(self, **kwargs):
+            status_starts.append(kwargs['is_running'])
+
+        def clear_running_status_bar(self, tools_count):
+            pass
+
+        def show_summary(self, summary):
+            pass
+
+        def show_interrupted(self):
+            pass
+
+    runtime = SimpleNamespace(view=lambda: None)
+    cli = CLI(None, Presenter(), runtime=runtime)
+    first = UserRequest('相同用户输入', str(tmp_path), {'task_id': 'task', 'runtime_submission_id': 'first'})
+    resumed = UserRequest(first.prompt, first.cwd, dict(first.metadata))
+    cli._show_run_started(first)
+    cli._show_run_started(resumed)
+    assert displayed == ['first']
+    assert status_starts == [True]
+    summary = ExecutionSummary('Done.', [], outcome='completed' if terminal == 'finished' else 'interrupted')
+    getattr(cli, '_show_run_' + terminal)(summary)
+    second = UserRequest(first.prompt, first.cwd, {'task_id': 'task', 'runtime_submission_id': 'second'})
+    cli._show_run_started(second)
+    cli._show_run_started(UserRequest(second.prompt, second.cwd, dict(second.metadata)))
+    assert displayed == ['first', 'second']
+    assert status_starts == [True, True]

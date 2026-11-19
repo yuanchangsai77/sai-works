@@ -81,6 +81,10 @@ def reduce_tui_state(state: TUIState, event: TUIEvent) -> TUIState:
             tools=(),
             approval=None,
         )
+    elif event.kind == TUIEventKind.RUN_RESUMED:
+        # A suspended execution segment has no live tools. Its abandoned
+        # progress handles must not survive the fresh handles emitted on resume.
+        next_state = replace(state, tools=tuple(tool for tool in state.tools if tool.status != ToolStatus.RUNNING))
     elif event.kind == TUIEventKind.RUN_CANCELLING:
         next_state = replace(state, run_status=RunStatus.CANCELLING)
     elif event.kind in {TUIEventKind.RUN_FINISHED, TUIEventKind.RUN_FAILED}:
@@ -168,12 +172,14 @@ def reduce_tui_state(state: TUIState, event: TUIEvent) -> TUIState:
                 arguments=str(payload.get("arguments", "")),
             ),
         )
-    elif event.kind == TUIEventKind.APPROVAL_SELECTED and state.approval is not None:
+    elif (event.kind == TUIEventKind.APPROVAL_SELECTED and state.approval is not None
+          and event.entity_id == state.approval.approval_id):
         next_state = replace(
             state,
             approval=replace(state.approval, selected=int(payload.get("selected", 0)) % 2),
         )
-    elif event.kind == TUIEventKind.APPROVAL_RESOLVED:
+    elif (event.kind == TUIEventKind.APPROVAL_RESOLVED and state.approval is not None
+          and event.entity_id == state.approval.approval_id):
         next_state = replace(state, approval=None)
     elif event.kind == TUIEventKind.RESIZED:
         next_state = replace(
