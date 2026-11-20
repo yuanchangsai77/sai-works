@@ -14,7 +14,6 @@ from .mcp.config import MCPServerConfig, load_mcp_server_configs
 MAX_MODEL_RETRIES = 20
 MAX_RETRY_DELAY_SECONDS = 60.0
 MAX_MODEL_TURNS = 500
-MAX_MODEL_ATTEMPTS = 2_000
 MAX_CONSECUTIVE_MODEL_TIMEOUTS = 50
 MAX_RUN_SECONDS = 86_400.0
 MAX_PROMPT_CONTEXT_CHARS = 2_000_000
@@ -37,7 +36,7 @@ class ModelRetryConfig:
 @dataclass(frozen=True, slots=True)
 class OrchestrationConfig:
     max_turns: int = 100
-    max_model_attempts: int = 120
+    max_model_attempts: int = 0
     max_consecutive_model_timeouts: int = 8
     max_run_seconds: float = 0.0
     subagent_max_model_retries: int = 1
@@ -135,9 +134,9 @@ def _load_tuning(cwd: str | Path | None) -> tuple[ModelRetryConfig, Orchestratio
             max_turns=_bounded_int(values.get("orchestration.max_turns"), 100, 1, MAX_MODEL_TURNS, "orchestration.max_turns"),
             max_model_attempts=_bounded_int(
                 values.get("orchestration.max_model_attempts"),
-                120,
-                1,
-                MAX_MODEL_ATTEMPTS,
+                0,
+                0,
+                None,
                 "orchestration.max_model_attempts",
             ),
             max_consecutive_model_timeouts=_bounded_int(
@@ -204,11 +203,15 @@ def _merge_table(target: dict[str, object], prefix: str, raw: object, child: str
         target[f"{prefix}.{key}"] = value
 
 
-def _bounded_int(value: object, default: int, minimum: int, maximum: int, name: str) -> int:
+def _bounded_int(value: object, default: int, minimum: int, maximum: int | None, name: str) -> int:
     if value is None:
         return default
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{name} must be an integer")
+    if maximum is None:
+        if value < minimum:
+            raise ValueError(f"{name} must be at least {minimum}")
+        return value
     if not minimum <= value <= maximum:
         raise ValueError(f"{name} must be between {minimum} and {maximum} (internal hard limit)")
     return value

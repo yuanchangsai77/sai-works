@@ -38,8 +38,9 @@ delays = [0.5, 1, 1.5, 2, 3, 5, 8]
 # 一次任务中模型最多可继续思考或调用工具的轮数。
 # 默认 100，内部硬上限 500。
 max_turns = 100
-# 一次 run 内允许的模型请求总次数，包含 retry 和上下文摘要请求。默认 120，内部硬上限 2000。
-max_model_attempts = 120
+# 一次 run 内允许的模型请求总次数，包含 retry 和上下文摘要请求。
+# 默认 0（不限次数）；可设为任意正整数，无内部次数硬上限。
+max_model_attempts = 0
 # 连续模型超时达到该值时打开熔断器。默认 8，内部硬上限 50。
 max_consecutive_model_timeouts = 8
 # 可选的一次 run 执行时间上限，不含同步等待用户审批。默认 0（关闭）；
@@ -95,7 +96,8 @@ read_timeout = 300
 因此默认预算更长，但仍受 300 秒内部硬上限和独立重试次数约束。
 
 `max_model_attempts` 统计真实 HTTP/model 调用，`max_turns` 统计取得有效模型回复后的语义轮次；一次
-请求的 retry 不会增加 semantic turn。attempt 总数、连续超时或显式启用的 `max_run_seconds`
+请求的 retry 不会增加 semantic turn。`max_model_attempts` 默认为 `0`，表示不限制累计模型调用次数；
+显式配置正数时才启用次数预算。显式启用的 attempt 总数、连续超时或 `max_run_seconds`
 达到边界时，runtime 会保存 partial checkpoint 并返回结构化 `exhausted`，不会继续放大相同失败。
 
 `prompt_context_chars` 约束 messages 与工具 schema 的合计字符预算。系统规则、当前请求和 runtime checkpoint 优先保留；

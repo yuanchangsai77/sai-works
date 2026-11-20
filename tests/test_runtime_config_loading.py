@@ -264,3 +264,38 @@ def test_mcp_config_rejects_invalid_field_types(field, value, message):
 
     with pytest.raises(ValueError, match=message):
         _build_server_config(raw)
+
+
+@pytest.mark.parametrize("configured", [False, True])
+def test_model_attempt_budget_defaults_to_unlimited(tmp_path, monkeypatch, configured):
+    monkeypatch.setattr("saiworks.config.Path.home", lambda: tmp_path / "home")
+    if configured:
+        config_dir = tmp_path / ".saiworks"
+        config_dir.mkdir()
+        (config_dir / "config.toml").write_text(
+            "[orchestration]\nmax_model_attempts = 0\n", encoding="utf-8"
+        )
+    assert load_runtime_config(cwd=tmp_path).orchestration.max_model_attempts == 0
+
+
+@pytest.mark.parametrize("attempts", [2001, 1000000])
+def test_model_attempt_budget_accepts_values_above_former_hard_limit(tmp_path, monkeypatch, attempts):
+    monkeypatch.setattr("saiworks.config.Path.home", lambda: tmp_path / "home")
+    config_dir = tmp_path / ".saiworks"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        f"[orchestration]\nmax_model_attempts = {attempts}\n", encoding="utf-8"
+    )
+    assert load_runtime_config(cwd=tmp_path).orchestration.max_model_attempts == attempts
+
+
+@pytest.mark.parametrize("value", ["-1", "true", "1.5", '\"unlimited\"'])
+def test_model_attempt_budget_requires_nonnegative_integer(tmp_path, monkeypatch, value):
+    monkeypatch.setattr("saiworks.config.Path.home", lambda: tmp_path / "home")
+    config_dir = tmp_path / ".saiworks"
+    config_dir.mkdir()
+    (config_dir / "config.toml").write_text(
+        f"[orchestration]\nmax_model_attempts = {value}\n", encoding="utf-8"
+    )
+    with pytest.raises(ValueError, match="orchestration.max_model_attempts"):
+        load_runtime_config(cwd=tmp_path)

@@ -115,7 +115,7 @@ class ExecutionEngine:
         max_model_retries: int = 7,
         model_retry_delays: tuple[float, ...] | None = None,
         max_turns: int = 100,
-        max_model_attempts: int = 120,
+        max_model_attempts: int = 0,
         max_consecutive_model_timeouts: int = 8,
         max_run_seconds: float = 0.0,
         mcp_server_count: int = 0,
@@ -133,7 +133,7 @@ class ExecutionEngine:
         self.max_model_retries = max(0, int(max_model_retries))
         self.model_retry_delays = tuple(model_retry_delays or self.model_retry_delays)
         self.max_turns = max(1, int(max_turns))
-        self.max_model_attempts = max(1, int(max_model_attempts))
+        self.max_model_attempts = max(0, int(max_model_attempts))
         self.max_consecutive_model_timeouts = max(1, int(max_consecutive_model_timeouts))
         self.max_run_seconds = max(0.0, float(max_run_seconds))
         self.run_budget_policy = RunBudgetPolicy(

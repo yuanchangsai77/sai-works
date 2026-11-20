@@ -34,7 +34,7 @@ def valid_evidence_kinds(checkpoint: TaskCheckpoint) -> set[str]:
 
 @dataclass(frozen=True, slots=True)
 class RunBudgetPolicy:
-    max_model_attempts: int = 120
+    max_model_attempts: int = 0
     max_consecutive_model_timeouts: int = 8
     max_run_seconds: float = 0.0
 
@@ -52,7 +52,7 @@ class RunBudgetPolicy:
                 retryability="conditional",
                 required_action="resume",
             )
-        if model_attempts >= self.max_model_attempts:
+        if self.max_model_attempts > 0 and model_attempts >= self.max_model_attempts:
             return RuntimeBlocker(
                 error_code="model_attempt_budget_exhausted",
                 summary=f"Run stopped after {model_attempts} model attempts without completion.",

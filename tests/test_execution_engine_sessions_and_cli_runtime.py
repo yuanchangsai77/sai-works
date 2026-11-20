@@ -3729,3 +3729,39 @@ def test_cli_displays_submission_once_across_resume_and_allows_identical_next_in
     cli._show_run_started(UserRequest(second.prompt, second.cwd, dict(second.metadata)))
     assert displayed == ['first', 'second']
     assert status_starts == [True, True]
+
+
+@pytest.mark.parametrize("attempt_limit", [None, 0])
+def test_engine_can_complete_after_120_model_attempts(tmp_path, attempt_limit):
+    class LongRunningModel:
+        calls = 0
+
+        def respond(self, _session):
+            self.calls += 1
+            return ModelReply(message="continue" if self.calls <= 120 else "finished", done=self.calls > 120)
+
+    logger = InMemoryLogger()
+    model = LongRunningModel()
+    options = {} if attempt_limit is None else {"max_model_attempts": attempt_limit}
+    engine = ExecutionEngine(
+        model=model,
+        tools=build_builtin_registry(logger),
+        guardrails=Guardrails(policy=DefaultPolicy(mode="auto"), logger=logger),
+        logger=logger,
+        max_turns=130,
+        **options,
+    )
+    summary = engine.execute(UserRequest(prompt="inspect", cwd=str(tmp_path)))
+    assert model.calls == 121
+    assert summary.outcome == "completed"
+
+
+def test_unlimited_model_attempts_keep_other_budget_protections():
+    import time
+    from saiworks.orchestration.control import RunBudgetPolicy
+
+    policy = RunBudgetPolicy()
+    assert policy.problem(time.monotonic(), 10000, 0) is None
+    assert policy.problem(time.monotonic(), 10000, 8).error_code == "model_timeout_circuit_open"
+    policy = RunBudgetPolicy(max_run_seconds=1)
+    assert policy.problem(time.monotonic() - 2, 10000, 0).error_code == "run_time_budget_exhausted"
