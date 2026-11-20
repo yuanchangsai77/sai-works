@@ -235,6 +235,7 @@ class ModelPromptBuilder:
             if session.available_tools and action_protocol == "native_tools" else 0
         )
 
+        correction_chars = len(json.dumps(session.model_correction, ensure_ascii=False)) if session.model_correction else 0
         messages = self.context_packager.package_segments(
             [
                 ContextSegment("\n".join(protocol_lines), "model protocol", priority=100, required=True),
@@ -275,14 +276,16 @@ class ModelPromptBuilder:
                 ContextSegment("\n".join(contextual_user_lines), "session recovery context", priority=70),
             ],
             observation_groups=observations,
-            reserved_chars=schema_chars,
+            reserved_chars=schema_chars + correction_chars,
             compress_segment=compress_segment,
             working_set_summary_cache=session.working_set_summary_cache,
             workspace_revision=session.checkpoint.workspace_revision,
         )
         session.visible_observations = self.context_packager.last_visibility
         session.visible_observation_views = self.context_packager.last_views
-        return messages
+        # Reserve and append the complete exchange atomically: native tool IDs
+        # and their rejection results must never be dropped independently.
+        return [*messages, *session.model_correction]
 
     def _recovery_groups(self, session: SessionContext) -> list[list[dict[str, object]]]:
         groups = [[record.message("Historical partial summary (not current execution evidence):\n" + record.summary)]

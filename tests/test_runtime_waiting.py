@@ -458,7 +458,12 @@ def test_wait_does_not_make_new_capabilities_visible_in_the_original_turn(tmp_pa
                 warehouse.open_toolbox('local:deferred')
                 warehouse.activate(['local:deferred:tool'], scope='run')
                 return ModelReply('Choose.', actions=[ToolAction('request_user_input', {'question': 'Proceed?'}), ToolAction('deferred')])
-            assert session.tool_results[-1].error_code == 'tool_not_visible_this_turn'
+            if self.calls == 2:
+                assert session.tool_results == []
+                assert session.model_correction
+                assert 'deferred' not in {item.name for item in session.available_tools}
+                return ModelReply('Ask first.', actions=[ToolAction('request_user_input', {'question': 'Proceed?'})])
+            assert session.tool_results[-1].name == 'request_user_input'
             assert calls == []
             return ModelReply('Use it in this new turn.', done=True, actions=[ToolAction('deferred')])
 
@@ -476,7 +481,7 @@ def test_wait_does_not_make_new_capabilities_visible_in_the_original_turn(tmp_pa
     runtime.reply(control, question.interaction_id, 'yes')
     assert runtime.advance('visibility').outcome == 'completed'
     assert calls == ['executed']
-    assert model.calls == 2
+    assert model.calls == 3
 
 
 @pytest.mark.parametrize('finished', [False, True])

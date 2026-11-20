@@ -14,6 +14,8 @@ TUI 输入缓冲区独立于执行状态，粘贴只编辑、明确提交后清�
 
 桌面参考应用提供 GUI 无关的 `DesktopController`：它仅保持界面本地的当前会话与展示投影，工作区打开、会话恢复、任务提交、取消和关闭均调用 Runtime 门面。它不暴露 Engine、ToolRegistry 或 Policy，不创建第二套会话与任务存储。`desktop_presenter` 只负责语义动作名称、审批文案和 Activity 展示状态，`desktop_windows` 负责 Quick Actions、Diagnostics 和日志目录入口；二者都不持有 Runtime 权威状态。`DesktopApp` 使用内置 Tk 8.6 提供参考窗口，已接通工作区、基于 session 的任务导航、后台执行、紧凑进度卡、按需 Activity、审批、取消、结果卡、Quick Actions 与当前 run 诊断；窗口已有 Conversation/Result/Artifacts 投影、历史结果和临时流式预览，Artifacts 当前是已有引用与证据来源；尚未接入任务快照与修订订阅或完整文件/diff 查看，也未经生产打包、签名、更新与完整视觉/无障碍验收。
 
+模型决策在派发前整批校验名称和参数，未知工具等可恢复协议错误在原任务内最多纠正三次；原生调用反馈保留调用 ID 关联并明确整批未执行，不重放已有工具操作。纠错、工具失败与服务重试的边界及回归入口见[模型决策错误恢复](runtime/evidence-recovery.md#模型决策错误恢复)，实际 Provider 恢复效果尚待验收。
+
 ## 2. 目标领域与代码事实
 
 | 目标领域 | 当前机制 | 未闭合边界 | 主要依据 |

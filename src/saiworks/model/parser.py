@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import json
 import re
 from html import unescape
 
 from ..types import ModelReply, ToolAction
-from .types import CleanedContent, ModelProtocolError
+from ..tools.schema_validation import validate_schema
+from .types import CleanedContent, ModelDecisionError, ModelProtocolError
 
 
 class ModelReplyParser:
@@ -13,6 +15,41 @@ class ModelReplyParser:
         self.logger = logger
 
     def parse_response(
+        self, data: dict[str, object], *, allowed_tool_names: set[str] | None = None,
+        action_protocol: str = "native_tools", tool_schemas: dict[str, dict] | None = None,
+    ) -> ModelReply:
+        # Explicit provider stops are not generation mistakes. Keep them out of
+        # the recoverable parser boundary, including unknown stop reasons.
+        if data.get("error"):
+            raise ModelProtocolError(f"Model response reported an error: {data['error']}")
+        choices = data.get("choices")
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            first = choices[0]
+            reason = first.get("finish_reason")
+            if reason not in (None, "stop", "tool_calls", "length"):
+                raise ModelProtocolError(f"Model response did not finish normally: {reason!r}")
+            message = first.get("message")
+            if isinstance(message, dict) and message.get("refusal"):
+                raise ModelProtocolError("Model response was explicitly refused by the provider")
+        try:
+            reply = self._parse_response(data, allowed_tool_names=allowed_tool_names,
+                                         action_protocol=action_protocol)
+            if tool_schemas is not None:
+                validate_actions(reply.actions, tool_schemas)
+            return reply
+        except ModelProtocolError as error:
+            rejected = error if isinstance(error, ModelDecisionError) else ModelDecisionError(str(error))
+            rejected.available_tools = sorted(allowed_tool_names or ())
+            choices = data.get("choices")
+            if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+                message = choices[0].get("message")
+                if isinstance(message, dict) and isinstance(message.get("tool_calls"), list):
+                    rejected.tool_calls = deepcopy(message["tool_calls"])
+            if rejected is error:
+                raise
+            raise rejected from error
+
+    def _parse_response(
         self,
         data: dict[str, object],
         *,
@@ -30,8 +67,9 @@ class ModelReplyParser:
             raise ModelProtocolError(f"Model choice must be an object: {first!r}")
 
         finish_reason = first.get("finish_reason")
-        if finish_reason not in (None, "stop", "tool_calls"):
-            raise ModelProtocolError(f"Model response did not finish normally: {finish_reason!r}")
+        if finish_reason == "length":
+            raise ModelDecisionError("Model response was truncated before completion",
+                                     code="truncated_model_response", details={"finish_reason": finish_reason})
 
         message = first.get("message")
         if not isinstance(message, dict):
@@ -136,14 +174,17 @@ class ModelReplyParser:
                 try:
                     arguments = json.loads(raw_arguments or "{}")
                 except json.JSONDecodeError as error:
-                    raise ModelProtocolError(f"Model tool_call arguments were not valid JSON: {item!r}") from error
+                    raise ModelDecisionError(f"Model tool_call arguments were not valid JSON for {name}",
+                                             code="invalid_arguments", details={"tool": name}) from error
             elif isinstance(raw_arguments, dict):
                 arguments = raw_arguments
             else:
-                raise ModelProtocolError(f"Model tool_call arguments must be an object: {item!r}")
+                raise ModelDecisionError(f"Model tool_call arguments must be an object for {name}",
+                                         code="invalid_arguments", details={"tool": name})
 
             if not isinstance(arguments, dict):
-                raise ModelProtocolError(f"Model tool_call arguments must decode to an object: {item!r}")
+                raise ModelDecisionError(f"Model tool_call arguments must decode to an object for {name}",
+                                         code="invalid_arguments", details={"tool": name})
 
             actions.append(ToolAction(name=name, arguments=arguments))
 
@@ -283,7 +324,8 @@ class ModelReplyParser:
 
     def _validate_tool_name(self, name: str, allowed_tool_names: set[str] | None) -> None:
         if allowed_tool_names is not None and name not in allowed_tool_names:
-            raise ModelProtocolError(f"Model requested unknown tool: {name}")
+            raise ModelDecisionError(f"Model requested unknown tool: {name}",
+                                     code="unknown_tool", details={"tool": name})
 
     def _parse_content_tool_calls(
         self,
@@ -398,3 +440,19 @@ class ModelReplyParser:
                     return content[start : index + 1]
 
         return None
+
+
+def validate_actions(actions: list[ToolAction], schemas: dict[str, dict]) -> None:
+    """Validate the whole decision before admitting any tool in it."""
+    for action in actions:
+        if action.name not in schemas:
+            raise ModelDecisionError(f"Model requested unknown tool: {action.name}",
+                                     code="unknown_tool", details={"tool": action.name})
+        issue = validate_schema(action.arguments, schemas[action.name])
+        if issue is not None:
+            raise ModelDecisionError(
+                f"Invalid arguments for {action.name}: {issue.path or '$'} {issue.message}",
+                code="invalid_arguments",
+                details={"tool": action.name, "path": issue.path, "keyword": issue.keyword,
+                         "expected": issue.expected, "actual": issue.actual},
+            )

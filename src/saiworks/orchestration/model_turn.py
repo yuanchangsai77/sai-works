@@ -1,11 +1,16 @@
 from __future__ import annotations
 
+from copy import deepcopy
+import json
 import time
 
-from ..model.types import ModelRetryableError
+from ..model.types import ModelDecisionError, ModelRetryableError
+from ..model.parser import validate_actions
 from ..types import RuntimeBlocker
 from .run_state import RunState
 from .session import SessionContext
+
+MAX_DECISION_CORRECTIONS = 3
 
 
 class RunBudgetReached(BaseException):
@@ -41,6 +46,10 @@ class ModelTurn:
     def request(self):
         engine = self.engine
         state = self.state
+        # A correction is still the same decision turn. Registry changes or
+        # adapter mutations must not widen its advertised tools or schemas.
+        turn_tools = deepcopy(self.session.available_tools)
+        schemas = {tool.name: deepcopy(tool.input_schema) for tool in turn_tools}
         reporter = engine.progress_reporter
         progress_handle = reporter.model_started() if reporter else None
         stream_observer_setter = getattr(engine.model, "set_natural_language_stream_observer", None)
@@ -57,6 +66,7 @@ class ModelTurn:
         started = time.monotonic()
         try:
             retry_count = 0
+            correction_count = 0
             while True:
                 if retry_count > 0:
                     retry_reporter = getattr(reporter, "model_retrying", None)
@@ -77,7 +87,21 @@ class ModelTurn:
                         break
                     if not getattr(engine.model, "tracks_model_requests", False):
                         self.before_request()
-                    reply = engine.model.respond(self.session)
+                    self.session.available_tools = deepcopy(turn_tools)
+                    try:
+                        reply = engine.model.respond(self.session)
+                    finally:
+                        self.session.available_tools = deepcopy(turn_tools)
+                    try:
+                        validate_actions(reply.actions, schemas)
+                    except ModelDecisionError as error:
+                        error.tool_calls = [
+                            {"id": f"call_rejected_{state.turn_count}_{index}", "type": "function",
+                             "function": {"name": action.name, "arguments": json.dumps(action.arguments, ensure_ascii=False)}}
+                            for index, action in enumerate(reply.actions)
+                        ]
+                        raise
+                    self.session.model_correction = []
                     acknowledge = getattr(engine.tools, 'acknowledge_runtime_state', None)
                     if callable(acknowledge):
                         acknowledge()
@@ -91,6 +115,36 @@ class ModelTurn:
                 except RunBudgetReached as error:
                     budget_problem = error.blocker
                     break
+                except ModelDecisionError as error:
+                    reply = None
+                    engine._raise_if_cancelled()
+                    state.consecutive_model_timeouts = 0
+                    self.session.checkpoint.runtime_state["consecutive_model_timeouts"] = "0"
+                    rejected = error
+                    rejected.available_tools = sorted(schemas)
+                    engine.logger.record("model.decision_rejected", {
+                        "request_id": rejected.request_id,
+                        "task_id": engine._execution_context.task_id,
+                        "error_code": rejected.code, "message": str(rejected),
+                        "details": rejected.details, "tool_calls": rejected.tool_calls,
+                        "available_tools": rejected.available_tools, "batch_executed": False,
+                        "correction": correction_count, "max_corrections": MAX_DECISION_CORRECTIONS,
+                    })
+                    if correction_count >= MAX_DECISION_CORRECTIONS:
+                        raise ModelDecisionError(
+                            f"Model decision correction exhausted after {MAX_DECISION_CORRECTIONS} corrections: {error}",
+                            code="model_decision_correction_exhausted",
+                            details={"last_error_code": rejected.code},
+                        ) from error
+                    correction_count += 1
+                    profile = getattr(engine.model, "capability_profile", None)
+                    self.session.model_correction = rejected.correction_messages(
+                        native_tools=getattr(profile, "action_protocol", "native_tools") == "native_tools",
+                    )
+                    correction_reporter = getattr(reporter, "model_retrying", None)
+                    if callable(correction_reporter):
+                        correction_reporter(progress_handle, correction_count, MAX_DECISION_CORRECTIONS,
+                                            "Correcting rejected model decision", 0.0)
                 except (ModelRetryableError, TimeoutError) as error:
                     if engine._is_timeout_error(error):
                         state.consecutive_model_timeouts += 1

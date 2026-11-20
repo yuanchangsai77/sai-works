@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from copy import deepcopy
 import http.client
 import ipaddress
 import json
@@ -195,6 +196,7 @@ class OpenAICompatibleModelClient:
         return summary
 
     def respond(self, session: SessionContext) -> ModelReply:
+        available_tools = deepcopy(session.available_tools)
         session.request.metadata["model_capability_profile"] = {
             "structured_output_mode": self.capability_profile.structured_output_mode,
             "native_tool_calls": self.capability_profile.native_tool_calls,
@@ -224,7 +226,7 @@ class OpenAICompatibleModelClient:
             "stream": self.stream,
         }
         tools = (
-            self.prompt_builder.build_tools(session.available_tools)
+            self.prompt_builder.build_tools(available_tools)
             if self.capability_profile.action_protocol == "native_tools" else []
         )
         if tools:
@@ -267,14 +269,19 @@ class OpenAICompatibleModelClient:
                     },
                 },
             )
-        data = self._post_json(url, payload, request_id=request_id)
-        if self.logger is not None:
-            self.logger.record("model.response", {**data, "_transport_request_id": request_id})
-        reply = self.parser.parse_response(
-            data,
-            allowed_tool_names={tool.name for tool in session.available_tools},
-            action_protocol=self.capability_profile.action_protocol,
-        )
+        try:
+            data = self._post_json(url, payload, request_id=request_id)
+            if self.logger is not None:
+                self.logger.record("model.response", {**data, "_transport_request_id": request_id})
+            reply = self.parser.parse_response(
+                data,
+                allowed_tool_names={tool.name for tool in available_tools},
+                action_protocol=self.capability_profile.action_protocol,
+                tool_schemas={tool.name: tool.input_schema for tool in available_tools},
+            )
+        except model_types.ModelDecisionError as error:
+            error.request_id = request_id
+            raise
         if self.logger is not None:
             self.logger.record(
                 "model.parsed_reply",
@@ -387,7 +394,7 @@ class OpenAICompatibleModelClient:
                                 "model.invalid_stream",
                                 {"url": url, "request_id": request_id, "reason": str(error)},
                             )
-                        raise model_types.ModelProtocolError(f"Model SSE response was invalid: {error}") from error
+                        raise model_types.ModelDecisionError(f"Model SSE response was invalid: {error}") from error
                     except Exception as error:
                         if self.logger is not None:
                             self.logger.record(
@@ -469,15 +476,17 @@ class OpenAICompatibleModelClient:
                         "model.invalid_json",
                         {"url": url, "request_id": request_id, "body": body},
                     )
-                raise model_types.ModelProtocolError(f"Model response was not valid JSON: {body}") from error
+                raise model_types.ModelDecisionError(f"Model response was not valid JSON: {body}") from error
 
-        if "choices" not in data:
+        if isinstance(data, dict) and data.get("error"):
+            raise model_types.ModelProtocolError(f"Model response reported an error: {data['error']}")
+        if not isinstance(data, dict) or "choices" not in data:
             if self.logger is not None:
                 self.logger.record(
                     "model.invalid_shape",
                     {"url": url, "request_id": request_id, "body": data},
                 )
-            raise model_types.ModelProtocolError(f"Model response missing choices: {data}")
+            raise model_types.ModelDecisionError(f"Model response missing choices: {data}")
 
         return data
 
@@ -546,6 +555,7 @@ class OpenAICompatibleModelClient:
         response_model = self.model
         role = "assistant"
         content_parts: list[str] = []
+        refusal_parts: list[str] = []
         tool_calls: dict[int, dict[str, object]] = {}
         finish_reason: str | None = None
         usage: dict[str, object] = {}
@@ -572,8 +582,8 @@ class OpenAICompatibleModelClient:
                 stats["first_event_after_ms"] = event_after_ms
                 if self.logger is not None:
                     self.logger.record("model.stream_first_event", {"request_id": request_id})
-            if isinstance(event.get("error"), dict):
-                raise ValueError(str(event["error"].get("message", "stream failed")))
+            if event.get("error"):
+                raise model_types.ModelProtocolError(f"Model stream reported an error: {event['error']}")
             response_id = str(event.get("id") or response_id)
             response_model = str(event.get("model") or response_model)
             if isinstance(event.get("usage"), dict):
@@ -585,6 +595,8 @@ class OpenAICompatibleModelClient:
             delta = choice.get("delta") if isinstance(choice.get("delta"), dict) else {}
             if isinstance(delta.get("role"), str):
                 role = delta["role"]
+            if delta.get("refusal"):
+                refusal_parts.append(str(delta["refusal"]))
             delta_text = self._stream_delta_text(delta.get("content"))
             if delta_text:
                 content_parts.append(delta_text)
@@ -630,6 +642,8 @@ class OpenAICompatibleModelClient:
             stats["natural_language_format"] = projector.input_mode
 
         message: dict[str, object] = {"role": role, "content": "".join(content_parts)}
+        if refusal_parts:
+            message["refusal"] = "".join(refusal_parts)
         if tool_calls:
             message["tool_calls"] = [tool_calls[index] for index in sorted(tool_calls)]
         stats["tool_call_count"] = len(tool_calls)

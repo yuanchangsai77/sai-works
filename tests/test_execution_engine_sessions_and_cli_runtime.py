@@ -1189,7 +1189,16 @@ def test_newly_activated_tool_cannot_run_in_same_model_turn(tmp_path):
                         ToolAction("leaf", {}),
                     ],
                 )
+            if self.calls == 2:
+                assert not any(tool.name == "leaf" for tool in session.available_tools)
+                assert session.tool_results == []
+                assert session.model_correction
+                return ModelReply(message="activate first", actions=[
+                    ToolAction("capability_activate", {"capability_ids": ["fake:box:leaf"]}),
+                ])
             assert any(tool.name == "leaf" for tool in session.available_tools)
+            if self.calls == 3:
+                return ModelReply(message="use now", actions=[ToolAction("leaf", {})])
             return ModelReply(message="done", done=True)
 
     engine = ExecutionEngine(
@@ -1202,7 +1211,10 @@ def test_newly_activated_tool_cannot_run_in_same_model_turn(tmp_path):
     summary = engine.execute(UserRequest(prompt="use leaf", cwd=str(tmp_path), metadata={"session_id": "s"}))
 
     assert summary.tool_results[0].success is True
-    assert summary.tool_results[1].error_code == "tool_not_visible_this_turn"
+    assert summary.tool_results[1].name == "leaf"
+    assert summary.tool_results[1].success is True
+    assert len(summary.tool_results) == 2
+    assert summary.outcome == "completed"
 
 
 def test_engine_keeps_reasoning_after_repeated_denials_until_budget(tmp_path):
@@ -2112,33 +2124,28 @@ def test_subagent_can_request_a_structured_effect_upgrade_without_gaining_it(tmp
 
 
 def test_invalid_subagent_effect_contract_falls_back_to_read_only(tmp_path):
+    from saiworks.model.types import ModelDecisionError
+    from saiworks.orchestration.actions import ActionFlow
+
     class InvalidContractModel:
         def respond(self, session):
             names = {tool.name for tool in session.available_tools}
             assert "read_file" in names
             assert "patch" not in names
-            return ModelReply(
-                message="try patch",
-                actions=[ToolAction(name="patch", arguments={"diff": ""})],
-                done=True,
-            )
+            return ModelReply("try patch", actions=[ToolAction("patch", {"diff": ""})], done=True)
 
     logger = InMemoryLogger()
-    summary = ExecutionEngine(
-        model=InvalidContractModel(),
-        tools=build_builtin_registry(logger),
-        guardrails=Guardrails(policy=DefaultPolicy(), logger=logger),
-        logger=logger,
-    ).execute(
-        UserRequest(
-            prompt="fix",
-            cwd=str(tmp_path),
-            metadata={"delegated_task": {"allowed_effects": "write"}},
-        )
-    )
-
-    assert summary.outcome == "blocked"
-    assert summary.tool_results[0].error_code == "delegated_contract_invalid"
+    tools = build_builtin_registry(logger)
+    request = UserRequest("fix", str(tmp_path), {"delegated_task": {"allowed_effects": "write"}})
+    engine = ExecutionEngine(InvalidContractModel(), tools, Guardrails(DefaultPolicy(), logger), logger)
+    with pytest.raises(ModelDecisionError, match="correction exhausted"):
+        engine.execute(request)
+    assert engine.last_failure_summary.tool_results == []
+    assert engine.last_failure_summary.outcome == "runtime_error"
+    # The independent execution-layer contract guard remains intact, even
+    # though hidden calls are now rejected earlier by whole-batch admission.
+    problem = object.__new__(ActionFlow)._delegated_effect_problem(tools.definition_for("patch"), request)
+    assert problem.error_code == "delegated_contract_invalid"
 
 
 def test_external_file_grant_does_not_replace_the_task_workspace_root(tmp_path):

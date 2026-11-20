@@ -29,6 +29,7 @@ class SessionContext:
     request: UserRequest
     workspace_state: WorkspaceSessionState = field(default_factory=WorkspaceSessionState)
     available_tools: list[ToolDefinition] = field(default_factory=list)
+    model_correction: list[dict[str, object]] = field(default_factory=list)
     history: list[str] = field(default_factory=list)
     model_history: list[list[dict[str, object]]] = field(default_factory=list)
     observations: list[Observation] = field(default_factory=list)

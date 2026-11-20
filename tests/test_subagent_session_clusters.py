@@ -996,7 +996,14 @@ def test_read_only_delegation_blocks_patch_in_runtime_policy(tmp_path, monkeypat
             )
 
     app.engine.model = PatchModel()
-    summary = app.run_background(
+    from saiworks.model.types import ModelDecisionError
+
+    decision = app.engine.guardrails.check(ToolAction("patch", {"diff": ""}),
+                                          app.engine.tools.definition_for("patch"))
+    assert decision.allowed is False
+    assert decision.requires_confirmation is False
+    assert decision.error_code == "delegated_effect_not_allowed"
+    request = (
         UserRequest(
             prompt="read only",
             cwd=str(tmp_path),
@@ -1016,8 +1023,9 @@ def test_read_only_delegation_blocks_patch_in_runtime_policy(tmp_path, monkeypat
         )
     )
 
-    assert summary.outcome == "blocked"
-    assert summary.tool_results[-1].error_code == "delegated_effect_not_allowed"
+    with pytest.raises(ModelDecisionError, match="correction exhausted"):
+        app.run_background(request)
+    assert app.engine.last_failure_summary.tool_results == []
     assert not (tmp_path / "blocked.txt").exists()
 
 
