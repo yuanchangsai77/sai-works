@@ -126,7 +126,23 @@ SAIWORKS_MODE=confirm
 协议校验后的单次回复。默认关闭以兼容不支持流式的直接模型端点。
 命令行可用 `--stream` 对本次进程启用，也可用 `--no-stream` 覆盖环境配置。
 
-`SAIWORKS_MODE` 可选值为 `readonly`、`confirm`、`auto`。MCP 的敏感值应通过系统环境变量提供，例如 `AMAP_MCP_KEY`。
+`SAIWORKS_MODE`、启动参数 `--mode` 和交互命令 `/mode` 可选值为 `readonly`、`confirm`、`auto`、`full-access`。
+
+| 模式 | 工具操作行为 |
+| --- | --- |
+| `readonly` | 允许读取，阻止其他操作 |
+| `confirm` | 读取免审批，写入、执行、测试、网络等需要审批 |
+| `auto` | 读取和写入免审批，执行、测试、网络等仍需审批 |
+| `full-access` | 已知风险类别的工具操作全部免人工审批，包括破坏性操作 |
+
+`full-access` 不绕过委派任务的效果与资源范围、工具路径检查、内容拦截或系统沙箱；未知风险类别仍拒绝。
+运行中切换模式不打断任务，对当前 Runtime 的后续权限检查生效；新建子 Runtime 继承创建时的当前模式，
+并继续应用既有委派范围与授权规则。已经运行的子 Runtime 保持自身模式；已挂起的审批仍需明确决定。策略见
+[安全策略源码](../../src/saiworks/safety/policy.py)，回归入口见
+[工具风险策略测试](../../tests/test_tool_risk_policy.py)、[等待续跑测试](../../tests/test_runtime_waiting.py)和
+[子任务模式继承测试](../../tests/test_subagent_session_clusters.py)。
+
+MCP 的敏感值应通过系统环境变量提供，例如 `AMAP_MCP_KEY`。
 
 CLI 与测试环境在未配置模型地址时仍可使用 `StubModelClient` 验证编排链路；桌面应用不做这种静默降级，缺少 `SAIWORKS_MODEL_BASE_URL` 时会停止启动并显示配置提示。每次运行选择的后端类型记录在 `.saiworks/runs/<run_id>/events.jsonl` 的 `runtime.model_backend` 事件中，并同步出现在 `details.log` 概览。
 

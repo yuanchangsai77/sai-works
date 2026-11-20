@@ -278,7 +278,12 @@ class ActionFlow:
             return
 
         decision = services.guardrails.check(action, definition)
-        if decision.requires_confirmation:
+        pending_approval = services.execution_context.pending_approval_action
+        matches_pending = pending_approval == (
+            action.name, action.arguments,
+            self._task_workspace_root(self.request, self.session), decision.risk_level,
+        )
+        if decision.requires_confirmation or (decision.allowed and matches_pending):
             approval_key = (cwd, decision.risk_level, key)
             approval = (
                 True

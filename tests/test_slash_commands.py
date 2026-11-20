@@ -405,3 +405,18 @@ def test_print_exit_info(tmp_path):
         
     finally:
         sys.stdout = original_stdout
+
+
+def test_full_access_mode_command_and_completion():
+    from saiworks.safety.policy import DefaultPolicy
+    from saiworks.safety.guardrails import Guardrails
+    from saiworks.observability.logger import InMemoryLogger
+
+    presenter = ConsolePresenter()
+    presenter._output = StringIO()
+    engine = SimpleNamespace(guardrails=Guardrails(DefaultPolicy(), InMemoryLogger()))
+    cli = CLI(engine=engine, presenter=presenter)
+    assert ("/mode full-access", "Run tools without approval") in cli.command_registry.get_completions("/mode full", cli)
+    assert cli.command_registry.execute(cli, "/mode full-access") is False
+    assert cli.runtime.safety_mode() == "full-access"
+    assert "full-access" in presenter._output.getvalue()

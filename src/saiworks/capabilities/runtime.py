@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from ..safety.policy import DefaultPolicy
+
 
 class RuntimeCapabilities:
     """User control of existing capability and policy mechanisms."""
@@ -99,7 +101,7 @@ class RuntimeCapabilities:
         if policy is None:
             raise RuntimeError("Engine policy configuration is not available.")
         if requested is not None:
-            if requested not in {"readonly", "confirm", "auto"}:
-                raise ValueError(f"Invalid mode '{requested}'. Use readonly, confirm, or auto.")
+            if requested not in DefaultPolicy.valid_modes:
+                raise ValueError(f"Invalid mode '{requested}'. Use readonly, confirm, auto, or full-access.")
             policy.mode = requested
         return getattr(policy, "mode", "confirm")

@@ -19,7 +19,7 @@ class PolicyDecision:
 class DefaultPolicy:
     """Mode-based safety policy for tool execution."""
 
-    valid_modes = {"readonly", "confirm", "auto"}
+    valid_modes = {"readonly", "confirm", "auto", "full-access"}
     read_risks = {"read"}
     confirm_risks = {"write", "execute", "test", "network", "destructive", "confirm"}
     auto_allowed_risks = {"read", "write"}
@@ -42,6 +42,11 @@ class DefaultPolicy:
                 risk_level,
                 "delegated_effect_not_allowed",
             )
+
+        if self.mode == "full-access":
+            if risk_level in self.read_risks | self.confirm_risks:
+                return PolicyDecision(True, False, "allowed", risk_level)
+            return PolicyDecision(False, False, f"tool '{action.name}' has unknown risk '{risk_level}'", risk_level)
 
         if self.mode == "readonly":
             if risk_level in self.read_risks:

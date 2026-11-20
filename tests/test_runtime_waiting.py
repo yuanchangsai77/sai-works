@@ -988,3 +988,38 @@ def test_tui_progress_reconciles_suspended_tools_across_repeated_user_waits(tmp_
             assert all(tool.status == ToolStatus.SUCCEEDED for tool in finished_questions)
     finally:
         runtime.close()
+
+
+def test_full_access_executes_without_creating_approval(tmp_path):
+    calls = []
+    runtime = runtime_for(tmp_path, ApprovalModel(), calls)
+    runtime.safety_mode("full-access")
+    task = runtime.accept(UserRequest("work", str(tmp_path)), submission_id="full-access")
+    summary = runtime.advance(task.submission_id)
+    assert isinstance(summary, ExecutionSummary)
+    assert summary.outcome == "completed"
+    assert calls == ["before", "effect", "after"]
+    access = runtime.grant_task_access(task.task_id)
+    assert not runtime.snapshot(access).pending_interactions
+
+
+@pytest.mark.parametrize("decision", ["approve", "deny"])
+def test_switching_full_access_does_not_decide_pending_approval(tmp_path, decision):
+    calls = []
+    runtime = runtime_for(tmp_path, ApprovalModel(), calls)
+    task = runtime.accept(UserRequest("work", str(tmp_path)), submission_id="switch-mode")
+    assert runtime.advance(task.submission_id).state == "waiting_approval"
+    control = runtime.grant_task_control(task.task_id, {"approve"})
+    approval, = runtime.pending_approvals(control)
+    runtime.safety_mode("full-access")
+    assert runtime.task_store.get_approval(approval.approval_id).state == "pending"
+    assert runtime.advance(task.submission_id).state == "waiting_approval"
+    assert calls == ["before"]
+    runtime.decide(control, approval.approval_id, decision,
+                   expected_action_fingerprint=approval.action_fingerprint)
+    summary = runtime.advance(task.submission_id)
+    assert isinstance(summary, ExecutionSummary)
+    assert calls.count("effect") == (1 if decision == "approve" else 0)
+    assert runtime.task_store.get_approval(approval.approval_id).state == (
+        "consumed" if decision == "approve" else "denied"
+    )

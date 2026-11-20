@@ -57,6 +57,7 @@ class ExecutionContext:
     action_journal: ActionJournal | None = None
     continuation: dict | None = None
     interaction_handler: object | None = None
+    pending_approval_action: tuple[str, dict, str, str] | None = None
     execution_started: bool = False
 
 

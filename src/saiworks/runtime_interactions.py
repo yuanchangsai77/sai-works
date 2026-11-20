@@ -75,12 +75,15 @@ class RuntimeInteractions:
 
     def bind(self, context, record, saved):
         runtime = self.runtime
+        context.pending_approval_action = None
         if runtime.subagent_grant is not None:
             context.interaction_handler = None
             return
         pending = saved['interaction'] if saved else None
         if pending and pending['kind'] == 'approval':
             approval = runtime.task_store.get_approval(pending['interaction_id'])
+            context.pending_approval_action = (approval.action_name, approval.arguments,
+                                               approval.workspace_root, approval.required_scope)
             if (not context.cancellation.is_set() and approval.action_name == 'workspace_access' and approval.state == 'approved'
                     and datetime.fromisoformat(approval.expires_at) > datetime.now(timezone.utc)
                     and str(Path(approval.arguments['path']).resolve(strict=False)) == approval.arguments['path']):
@@ -90,6 +93,7 @@ class RuntimeInteractions:
                 saved['payload']['permissions'].append({'capability': 'workspace_path', 'path': path, 'scope': 'session'})
                 saved['payload']['session']['workspace_state']['approved_roots'].append(path)
                 pending = None
+                context.pending_approval_action = None
 
         def interact(kind, action, question, cwd, scope='', options=()):
             nonlocal pending
@@ -104,6 +108,7 @@ class RuntimeInteractions:
                     approval = runtime.task_store.get_approval(pending['interaction_id'])
                     fingerprint = fingerprint_action(record.task_id, record.submission_id, action.name, action.arguments, cwd, scope)
                     if approval.action_fingerprint == fingerprint:
+                        context.pending_approval_action = None
                         if approval.state == 'denied':
                             pending = None
                             return False

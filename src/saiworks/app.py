@@ -106,21 +106,21 @@ def create_runtime(
         cluster_store=SessionClusterStore(),
         image_store=SessionImageStore(),
     )
-    subagent_runner = SubagentRunner(
-        coordinator=subagent_coordinator,
-        runtime_factory=lambda session, grant: create_runtime(
-            mode=config.mode,
-            workspace_root=session.cwd,
-            background=True,
-            subagent_grant=grant,
-        ),
-    )
     logger = _logger or InMemoryLogger()
     policy = DefaultPolicy(
         mode=runtime_mode,
         allowed_effects=(set(subagent_grant.allowed_effects) if subagent_grant is not None else None),
     )
     guardrails = Guardrails(policy=policy, logger=logger)
+    subagent_runner = SubagentRunner(
+        coordinator=subagent_coordinator,
+        runtime_factory=lambda session, grant: create_runtime(
+            mode=policy.mode,
+            workspace_root=session.cwd,
+            background=True,
+            subagent_grant=grant,
+        ),
+    )
 
     # Resolve skill registry directories
     builtins_dir = Path(__file__).parent / "skills" / "builtins"
@@ -344,7 +344,7 @@ def main() -> None:
         )
         parser.add_argument(
             "--mode",
-            choices=["readonly", "confirm", "auto"],
+            choices=sorted(DefaultPolicy.valid_modes),
             default=os.getenv("SAIWORKS_MODE", "confirm").strip() or "confirm",
             help="Safety mode for tool execution.",
         )

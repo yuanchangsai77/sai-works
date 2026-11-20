@@ -1016,10 +1016,20 @@ class TUIConsolePresenter(ConsolePresenter):
         with self._input_lock:
             if state.approval is not None:
                 return False
-            if self._user_input_waiter is not None:
-                self._resolve_user_input(self._user_input_waiter, self._composer.value.strip() or None)
-                return False
             prompt = self._composer.value.strip()
+            parts = prompt.split()
+            if parts and parts[0].lower() == "/mode":
+                # Harness control is independent of the running task or reply.
+                runtime = getattr(self, "runtime", None)
+                if runtime is not None:
+                    mode_arg = parts[1].lower() if len(parts) > 1 else None
+                    self.show_or_change_mode(runtime.view(), mode_arg)
+                    self._composer.set_value("")
+                    self._composer_draft = ""
+                    return False
+            if self._user_input_waiter is not None:
+                self._resolve_user_input(self._user_input_waiter, prompt or None)
+                return False
             if state.run_status != RunStatus.WORKING or not prompt:
                 return False
             self._queued_prompt = prompt

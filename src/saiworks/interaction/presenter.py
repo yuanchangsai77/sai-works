@@ -5,6 +5,7 @@ import re
 import sys
 from html import unescape
 
+from ..safety.policy import DefaultPolicy
 from ..types import ExecutionSummary, SessionRecord, StoredSession, ToolResult, UserRequest
 from ..sessions.messages import display_session_message
 from .input import PromptBox, StatusBar
@@ -240,8 +241,10 @@ class ConsolePresenter:
         if engine and hasattr(engine, "guardrails") and hasattr(engine.guardrails, "policy"):
             mode_val = getattr(engine.guardrails.policy, "mode", "confirm")
 
-        if mode_val == "auto":
-            mode_colored = f"{MAGENTA}auto{RESET} (Tool calls run automatically)"
+        if mode_val == "full-access":
+            mode_colored = f"{MAGENTA}full-access{RESET} (Tool calls run without approval)"
+        elif mode_val == "auto":
+            mode_colored = f"{MAGENTA}auto{RESET} (Reads and writes automatic; execution requires approval)"
         elif mode_val == "readonly":
             mode_colored = f"{GREEN}readonly{RESET} (No write operations allowed)"
         else:
@@ -641,7 +644,7 @@ class ConsolePresenter:
             self._print(f"  {CYAN}/help, ?{RESET}       Show this help message")
             self._print(f"  {CYAN}/clear{RESET}         Clear terminal screen")
             self._print(f"  {CYAN}/status{RESET}        Show session and system status")
-            self._print(f"  {CYAN}/mode [mode]{RESET}  Show or change safety mode ({GRAY}readonly{RESET}/{GRAY}confirm{RESET}/{GRAY}auto{RESET})")
+            self._print(f"  {CYAN}/mode [mode]{RESET}  Show or change safety mode ({GRAY}readonly{RESET}/{GRAY}confirm{RESET}/{GRAY}auto{RESET}/{GRAY}full-access{RESET})")
             self._print(f"  {CYAN}/skills{RESET}        List all scanned skills and metadata")
             self._print(f"  {CYAN}/tasks{RESET}         List active background tasks")
             self._print(f"  {CYAN}/resume [id]{RESET}   List or resume saved sessions")
@@ -874,8 +877,8 @@ class ConsolePresenter:
             self._print(f"Current safety mode: {BOLD}{current_mode}{RESET}\n")
             return
             
-        if mode_arg not in {"readonly", "confirm", "auto"}:
-            self._print(f"{RED}Error:{RESET} Invalid mode '{mode_arg}'. Use readonly, confirm, or auto.\n")
+        if mode_arg not in DefaultPolicy.valid_modes:
+            self._print(f"{RED}Error:{RESET} Invalid mode '{mode_arg}'. Use readonly, confirm, auto, or full-access.\n")
             return
             
         runtime = getattr(self, "runtime", None)

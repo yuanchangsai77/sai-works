@@ -81,3 +81,33 @@ def test_policy_keeps_normal_shell_command_execute_risk():
     decision = policy.evaluate(action, definition)
 
     assert decision.risk_level == "execute"
+
+
+@pytest.mark.parametrize("risk", ["read", "write", "execute", "test", "network", "destructive", "confirm"])
+def test_full_access_allows_known_tool_effects_without_approval(risk):
+    decision = decision_for("full-access", risk)
+    assert decision.allowed is True
+    assert decision.requires_confirmation is False
+
+
+def test_full_access_preserves_delegated_effect_contract():
+    policy = DefaultPolicy("full-access", allowed_effects={"read"})
+    decision = policy.evaluate(ToolAction("shell_exec", {"command": "echo ok"}),
+                               ToolDefinition("shell_exec", "", risk_level="execute"))
+    assert decision.allowed is False
+    assert decision.requires_confirmation is False
+    assert decision.error_code == "delegated_effect_not_allowed"
+
+
+def test_full_access_rejects_unknown_risk():
+    assert decision_for("full-access", "unknown").allowed is False
+
+
+def test_full_access_allows_destructive_shell_without_changing_risk():
+    decision = DefaultPolicy("full-access").evaluate(
+        ToolAction("shell_exec", {"command": "rm -rf build"}),
+        ToolDefinition("shell_exec", "", risk_level="execute"),
+    )
+    assert decision.risk_level == "destructive"
+    assert decision.allowed is True
+    assert decision.requires_confirmation is False

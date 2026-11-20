@@ -782,11 +782,12 @@ def test_composer_offers_dynamic_second_level_command_options(tmp_path, monkeypa
         "/mode readonly",
         "/mode confirm",
         "/mode auto",
+        "/mode full-access",
     ]
     composer.set_value("/mo")
     assert composer.edit("\r", []) == "changed"
     assert composer.value == "/mode "
-    assert len(composer.get_completion_matches()) == 3
+    assert len(composer.get_completion_matches()) == 4
     composer.set_value("/mode")
     assert composer.edit("\t", []) == "changed"
     assert composer.value == "/mode "
@@ -1707,3 +1708,53 @@ def test_terminal_settings_and_reader_ownership_restore_on_output_failure(when):
     finally:
         source.close()
         os.close(master)
+
+
+@pytest.mark.parametrize("command, expected", [
+    ("/mode", "confirm"), ("/mode auto", "auto"), ("/mode full-access", "full-access"),
+    ("/MODE readonly", "readonly"), ("/mode invalid", "confirm"),
+])
+def test_running_mode_command_does_not_interrupt_or_queue(monkeypatch, command, expected):
+    from saiworks.safety.policy import DefaultPolicy
+    from saiworks.safety.guardrails import Guardrails
+    from saiworks.observability.logger import InMemoryLogger
+    from saiworks.runtime import Runtime
+
+    presenter = TUIConsolePresenter(output=StringIO())
+    engine = SimpleNamespace(guardrails=Guardrails(DefaultPolicy(), InMemoryLogger()))
+    presenter.runtime = Runtime(engine, InMemoryLogger())
+    presenter.controller.publish(TUIEvent(TUIEventKind.RUN_STARTED))
+    presenter._composer.set_value(command)
+    interrupts = []
+    monkeypatch.setattr(presenter, "_interrupt_runtime", lambda: interrupts.append(True))
+
+    assert presenter._submit_runtime_prompt() is False
+    assert not interrupts
+    assert presenter._queued_prompt is None
+    assert presenter._composer.value == ""
+    assert presenter.controller.drain().run_status == RunStatus.WORKING
+    assert engine.guardrails.policy.mode == expected
+
+
+def test_mode_command_during_user_wait_keeps_request_pending(monkeypatch):
+    from saiworks.interaction.tui import _UserInputWaiter
+
+    presenter = TUIConsolePresenter(output=StringIO())
+    presenter.controller.publish(TUIEvent(TUIEventKind.RUN_STARTED))
+    waiter = _UserInputWaiter(draft=ComposerState(value="original draft"))
+    presenter._user_input_waiter = waiter
+    presenter.runtime = SimpleNamespace(view=lambda: object())
+    changes = []
+    monkeypatch.setattr(presenter, "show_or_change_mode", lambda view, mode: changes.append(mode))
+    presenter._composer.set_value("/mode auto")
+
+    assert presenter._submit_runtime_prompt() is False
+    assert changes == ["auto"]
+    assert presenter._user_input_waiter is waiter
+    assert not waiter.completed.is_set()
+    assert waiter.draft.value == "original draft"
+    assert presenter._composer.value == ""
+    presenter._composer.set_value("answer")
+    assert presenter._submit_runtime_prompt() is False
+    assert waiter.answer == "answer"
+    assert presenter._composer.value == "original draft"

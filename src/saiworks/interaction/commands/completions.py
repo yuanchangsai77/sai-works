@@ -17,7 +17,8 @@ def complete_mode(_cli: CLI, remainder: str) -> list[Completion]:
         (
             ("readonly", "Reject write operations"),
             ("confirm", "Ask before write operations"),
-            ("auto", "Run allowed tools automatically"),
+            ("auto", "Allow reads and writes; approve execution"),
+            ("full-access", "Run tools without approval"),
         ),
         remainder,
     )

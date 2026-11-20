@@ -1369,3 +1369,38 @@ def test_completion_evidence_is_finalized_before_persisted_projection(tmp_path):
     assert result.state == persisted["status"] == sessions.load(child.session_id).status == "blocked"
     assert persisted["outcome"] == entry.metadata["outcome"] == "stalled"
     assert entry.metadata["unresolved_requirements"] == ["missing required evidence: read"]
+
+
+@pytest.mark.parametrize(("initial", "current", "expected"), [
+    ("full-access", "readonly", "readonly"),
+    ("readonly", "full-access", "full-access"),
+    ("full-access", "confirm", "auto"),
+])
+def test_new_subagent_inherits_current_parent_mode(tmp_path, monkeypatch, initial, current, expected):
+    from types import SimpleNamespace
+    from saiworks.app import create_runtime
+    from saiworks.types import ToolDefinition
+
+    monkeypatch.setenv("SAIWORKS_MODEL_BASE_URL", "")
+    monkeypatch.setattr("pathlib.Path.home", lambda: tmp_path)
+    parent = create_runtime(workspace_root=tmp_path, mode=initial)
+    grant = _issue_subagent_grant(
+        cluster_id="cluster", session_id="child", parent_session_id="parent",
+        attempt=1, workspace_root=str(tmp_path), allowed_effects=["read", "write"],
+    )
+    child = None
+    try:
+        parent.safety_mode(current)
+        child = parent.subagent_runner.runtime_factory(SimpleNamespace(cwd=str(tmp_path)), grant)
+        policy = child.engine.guardrails.policy
+        assert policy.mode == expected
+        write = policy.evaluate(ToolAction("patch"), ToolDefinition("patch", "", risk_level="write"))
+        assert write.allowed is (expected != "readonly")
+        execute = policy.evaluate(ToolAction("shell_exec"),
+                                  ToolDefinition("shell_exec", "", risk_level="execute"))
+        assert execute.allowed is False
+        assert execute.error_code == "delegated_effect_not_allowed"
+    finally:
+        if child is not None:
+            child.close()
+        parent.close()

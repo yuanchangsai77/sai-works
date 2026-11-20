@@ -299,3 +299,9 @@ def test_model_attempt_budget_requires_nonnegative_integer(tmp_path, monkeypatch
     )
     with pytest.raises(ValueError, match="orchestration.max_model_attempts"):
         load_runtime_config(cwd=tmp_path)
+
+
+def test_full_access_mode_from_environment_and_explicit_override(monkeypatch):
+    monkeypatch.setenv("SAIWORKS_MODE", "full-access")
+    assert load_runtime_config().mode == "full-access"
+    assert load_runtime_config(mode="confirm").mode == "confirm"
